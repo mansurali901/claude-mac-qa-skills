@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/pure-dev-mansoorulhasan/Downloads/native-qa -maxdepth 3 -type f -name .*)",
+      "Bash(python3:*)",
+      "Bash(grep \"P1\" qa/flows/*/scenarios.md)",
+      "Bash(wc -l grep \"P2\" qa/flows/*/scenarios.md)",
+      "Bash(wc -l grep \"P3\" qa/flows/*/scenarios.md)",
+      "Bash(grep -h \"^\\\\| \\\\*\\\\*Priority\\\\*\\\\*\" qa/flows/*/scenarios.md)"
+    ]
+  }
+}
