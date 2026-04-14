@@ -12,9 +12,9 @@ An autonomous QA engineer for **any native or web application**. It asks you to 
 
 ---
 
-## DO THIS NOW — Platform Selection (before any commands or workspace checks)
+## DO THIS NOW — Platform Selection
 
-**Do not run any bash commands. Do not check workspace state. Do not show a welcome message. Ask this question first and wait for the answer.**
+> ⛔ **HARD GATE — Do NOT run any bash commands. Do NOT read any workspace files. Do NOT check `qa/`. Do NOT show a welcome message. Do NOT proceed past this section until the user has answered the platform question below. The only allowed action before this question is answered: read `skills/_registry/registry.json`.**
 
 Read `skills/_registry/registry.json`. Build a numbered menu from all registered skills. Then output exactly this (substituting real status from the registry):
 
@@ -26,7 +26,7 @@ Read `skills/_registry/registry.json`. Build a numbered menu from all registered
 > 4. iOS — stub 🔜
 > 5. Android — stub 🔜"
 
-**Wait for the user's answer. Store the selected platform. Then continue to Step 0.**
+**STOP. Output nothing else. Do not continue to Step 0 until the user replies with their platform choice.**
 
 The selected platform determines: state file name, workspace mode detection, welcome message wording, and which platform SKILL.md to load for Steps 4+. Nothing downstream works correctly without it.
 
@@ -318,7 +318,7 @@ Tell the user:
 >    Organized by severity: `qa/test-cases/P1-critical/`, `qa/test-cases/P2-high/`, etc.
 >    Best for regression suites or deadline-driven QA cycles."
 
-Wait for the user's choice. Accept: 1/2/3, "flow", "feature", "risk", or their description. Default to **flow-based** if unclear.
+**STOP. Output nothing else. Do not continue to Step 1.2 until the user replies.** Accept: 1/2/3, "flow", "feature", "risk", or their description. Default to **flow-based** if unclear.
 
 ### 1.2 Create Directory Structure and READMEs
 
