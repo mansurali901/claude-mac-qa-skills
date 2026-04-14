@@ -7,7 +7,7 @@
 | **Test Case ID** | TC-[NNN] |
 | **Application** | [App Name] |
 | **Feature** | [Feature or flow being tested] |
-| **Priority** | P1 / P2 / P3 / P4 |
+| **Priority** | P1 / P2 / P3 |
 | **Type** | Functional / UI / State / Error / Performance |
 | **Platform** | macOS [version] |
 | **Architecture** | arm64 (Apple Silicon) / x86_64 (Intel) / Both |
@@ -78,10 +78,10 @@ tell application "System Events"
         -- Step 2
         click button "[ButtonName]" of window 1
         delay 1
-        
+
         -- Step 3
         -- ...
-        
+
         -- Verify outcome
         set statusText to value of static text 1 of window 1
         if statusText contains "[expected text]" then
@@ -142,30 +142,12 @@ end tell
 - [ ] App remains usable (can recover)
 - [ ] No crash
 
-#### Negative Input Table
-
-| Input | Value | Expected Error |
-|-------|-------|----------------|
-| Empty | `""` | "[required field message]" |
-| Too long | 500-char string | "[length error message]" |
-| Invalid format | `"not-valid"` | "[format error message]" |
-
 ---
 
 ### Scenario 4: State Persistence — [After Relaunch]
 
 **Priority**: P2
 **Type**: State
-
-#### Steps
-
-| Step | Action | Command | Expected |
-|------|--------|---------|---------|
-| 1 | [Set up state] | [command] | State established |
-| 2 | Quit app | `tell app "[AppName]" to quit` | App quits cleanly |
-| 3 | Wait 2 seconds | `sleep 2` | — |
-| 4 | Relaunch | `open -a "[AppName]"` | App reopens |
-| 5 | Verify state | [check command] | State preserved |
 
 #### AppleScript
 
@@ -200,43 +182,17 @@ end tell
 
 #### Pass Criteria
 - [ ] [Specific state value] matches before and after relaunch
-- [ ] App does not show first-run experience again
 - [ ] No data loss
-
----
-
-### Scenario 5: Offline / Network Error
-
-**Priority**: P2
-**Type**: Error
-
-#### Steps
-
-| Step | Action | Command | Expected |
-|------|--------|---------|---------|
-| 1 | Launch app and log in | `open -a "[AppName]"` | Logged in |
-| 2 | Disable network | `networksetup -setairportpower en0 off` | Network off |
-| 3 | [Trigger network action] | [command] | Error message shown |
-| 4 | Re-enable network | `networksetup -setairportpower en0 on` | — |
-| 5 | Retry action | [command] | Action succeeds |
-
-#### Pass Criteria
-- [ ] Offline error is user-friendly (not raw error code)
-- [ ] App does not crash when offline
-- [ ] App recovers when network returns
-- [ ] **Network re-enabled after test** ← critical cleanup
 
 ---
 
 ## Automation Notes
 
 - **Method**: AppleScript via `osascript`
-- **Delays needed**: Add `delay 1` after each button click, `delay 3` after launch/quit
-- **Process name**: Verify exact process name with `ps aux | grep -i [appname]`
-- **Element selectors**: Always verify element names with a fresh UI dump before scripting
+- **Delays**: `delay 1` after each click, `delay 3` after launch/quit
+- **Process name**: Verify with `ps aux | grep -i [appname]`
+- **Element selectors**: Always name-based (`button "Save"`) not index-based (`button 1`)
 - **Test isolation**: Quit and relaunch app between scenarios for clean state
-- **Accessibility**: Must have Terminal → Accessibility permission. Check with:
-  `osascript -e 'tell application "System Events" to get name of every process'`
 
 ---
 
@@ -244,7 +200,7 @@ end tell
 
 | Bug ID | Description | Status | Workaround |
 |--------|-------------|--------|-----------|
-| [BUG-NNN] | [Description] | Open / Fixed | [If any] |
+| — | — | — | — |
 
 ---
 

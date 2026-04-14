@@ -1,0 +1,78 @@
+# Skills registry — health check results are machine-specific runtime state
+skills/_registry/health.json
+
+# ── QA Session Artifacts (regenerated every run — never commit) ──────────────
+
+# QA workspace — entirely generated per session, recreated by /native-qa init
+qa/
+
+# Test credentials
+.env.qa
+
+# Playwright run output
+playwright-report/
+test-results/
+blob-report/
+
+# Playwright traces and downloads (generated during test execution)
+trace/
+downloads/
+*.zip
+
+# Screenshots taken outside qa/ (e.g. accidental screencapture to root)
+screenshots/
+/*.png
+/*.jpg
+
+# Log files
+*.log
+npm-debug.log*
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Node dependencies
+node_modules/
+dist/
+.next/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# TypeScript build output
+*.js.map
+*.d.ts.map
+build/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE
+.idea/
+.vscode/settings.json
+*.sublime-workspace
+
+# Docker
+*.env.docker
+
+# Terraform state (local — use remote state in CI)
+infra/terraform/.terraform/
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+infra/terraform/.terraform.lock.hcl
+
+# Test output
+coverage/
+allure-results/
+allure-report/
+
+# Local Claude Code session state
+.claude/sessions/

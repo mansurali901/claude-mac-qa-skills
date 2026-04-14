@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qa-agent"
+version = "2.0.0"
+description = "AI-native QA platform powered by Claude Code"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+mobile = [
+    "Appium-Python-Client>=3.0.0",
+    "selenium>=4.0.0",
+]
+web = [
+    "playwright>=1.49.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.25.0",
+    "black>=24.0.0",
+    "ruff>=0.9.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.25.0",
+    "black>=24.0.0",
+    "ruff>=0.9.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["scripts"]
+
+[project.scripts]
+qa-explore-macos = "scripts.qa_explore_macos:main"
+qa-report = "scripts.generate_report:main"

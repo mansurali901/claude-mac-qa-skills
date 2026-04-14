@@ -1,0 +1,66 @@
+{
+  "version": "1.0",
+  "generated": "2026-04-14T00:00:00Z",
+  "skills": [
+    {
+      "id": "skill-macos-native",
+      "version": "2.1.0",
+      "platform": "darwin",
+      "status": "production",
+      "entrypoint": "skills/macos/SKILL.md",
+      "capabilities": ["app.launch", "app.quit", "ui.discover", "ui.click", "ui.type", "ui.screenshot", "menu.enumerate", "accessibility.check"],
+      "automation": "applescript+screencapture",
+      "last_health_check": null
+    },
+    {
+      "id": "skill-web",
+      "version": "1.0.0-beta",
+      "platform": "web",
+      "status": "beta",
+      "entrypoint": "skills/web/SKILL.md",
+      "capabilities": ["browser.navigate", "dom.discover", "dom.click", "dom.type", "screenshot.capture", "visual.diff", "accessibility.axe"],
+      "automation": "playwright",
+      "last_health_check": null
+    },
+    {
+      "id": "skill-windows-native",
+      "version": "0.1.0-stub",
+      "platform": "win32",
+      "status": "stub",
+      "entrypoint": "skills/windows/SKILL.md",
+      "capabilities": ["app.launch", "ui.discover", "ui.click"],
+      "automation": "winapdriver+uia3",
+      "last_health_check": null
+    },
+    {
+      "id": "skill-ios-native",
+      "version": "0.1.0-stub",
+      "platform": "ios",
+      "status": "stub",
+      "entrypoint": "skills/ios/SKILL.md",
+      "capabilities": ["app.launch", "ui.discover", "ui.tap"],
+      "automation": "xcuitest+xcrun",
+      "last_health_check": null
+    },
+    {
+      "id": "skill-android-native",
+      "version": "0.1.0-stub",
+      "platform": "android",
+      "status": "stub",
+      "entrypoint": "skills/android/SKILL.md",
+      "capabilities": ["app.launch", "ui.discover", "ui.tap"],
+      "automation": "uiautomator2+adb",
+      "last_health_check": null
+    },
+    {
+      "id": "skill-extension",
+      "version": "0.1.0-planned",
+      "platform": "extension",
+      "status": "planned",
+      "entrypoint": "skills/extension/SKILL.md",
+      "capabilities": [],
+      "automation": "playwright+chrome-extension-api",
+      "last_health_check": null
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "name": "qa-agent",
+  "version": "2.0.0",
+  "description": "AI-native QA platform powered by Claude Code — autonomous UI discovery, test generation, and execution for native apps and web",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "build:watch": "tsc --project tsconfig.json --watch",
+    "explore:web": "ts-node skills/web/explore.ts",
+    "report": "python3 skills/macos/generate-report.py",
+    "qa": "bash skills/macos/run-qa.sh",
+    "qa:parallel": "bash skills/macos/run-parallel.sh",
+    "lint": "eslint 'skills/web/**/*.ts'",
+    "format": "prettier --write '**/*.ts' '**/*.json'",
+    "test": "jest --testPathPattern='tests/'",
+    "test:watch": "jest --testPathPattern='tests/' --watch"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.36.0",
+    "@axe-core/playwright": "^4.10.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@playwright/test": "^1.59.1",
+    "allure-playwright": "^3.0.0",
+    "axe-core": "^4.10.0",
+    "dotenv": "^17.4.2",
+    "ioredis": "^5.3.2",
+    "pg": "^8.13.0",
+    "pixelmatch": "^6.0.0",
+    "playwright": "^1.49.0",
+    "pngjs": "^7.0.0",
+    "winston": "^3.17.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "@types/pixelmatch": "^5.2.6",
+    "@types/pngjs": "^6.0.5",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.4.0",
+    "ts-jest": "^29.2.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.0"
+  },
+  "keywords": [
+    "qa",
+    "testing",
+    "claude-code",
+    "ai-testing",
+    "applescript",
+    "playwright",
+    "macos",
+    "automation"
+  ],
+  "license": "MIT"
+}
