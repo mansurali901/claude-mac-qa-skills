@@ -39,7 +39,7 @@ Phase 2 — Full Coverage (credentials required)
 12. Extract runnable test scripts + finalize workspace
 ```
 
-Context is reset after each flow to prevent overflow — a state file (`qa/state-[platform].md`) acts as memory across resets.
+Context is reset after each flow to prevent overflow — a state file (`qa/state.md`) acts as memory across resets.
 
 ---
 
@@ -50,7 +50,7 @@ Context is reset after each flow to prevent overflow — a state file (`qa/state
 ```
 qa/
 ├── .qa-config.json              ← Workspace config (platform, app, counts)
-├── state-macos.md               ← Session checkpoint (resume from here)
+├── state.md                     ← Session checkpoint (resume from here)
 ├── planning/platforms.md
 ├── guardrails/do-and-dont.md
 ├── credentials/access.md
@@ -87,8 +87,7 @@ SKILL.md                          ← Root orchestrator — platform selection +
 skills/
 ├── _registry/registry.json       ← Platform skill registry
 ├── macos/
-│   ├── SKILL.md                  ← macOS runbook — Steps 4–11
-│   ├── explore.py                ← AppleScript UI enumeration (stdlib only)
+│   ├── SKILL.md                  ← macOS runbook — Steps 4–11 (explore script inlined)
 │   ├── templates/
 │   │   ├── flow.md
 │   │   ├── scenarios.md
@@ -97,14 +96,16 @@ skills/
 │       ├── macos-automation.md   ← AppleScript patterns + recipes
 │       └── test-patterns.md      ← Scenario patterns by UI element type
 ├── web/
-│   ├── SKILL.md                  ← Web runbook — Playwright-based Steps W-1–W-11
-│   ├── explore.ts                ← Homepage + link discovery
-│   ├── interact.ts               ← Flow interaction driver
-│   ├── visual-diff.ts            ← Pixelmatch visual regression
-│   ├── playwright.config.ts      ← Base Playwright config
+│   ├── SKILL.md                  ← Web runbook — Steps W-1–W-11 (inline Playwright exploration)
+│   ├── templates/
+│   │   ├── flow.md
+│   │   ├── scenarios.md
+│   │   ├── test-case.md
+│   │   └── playwright.config.ts  ← Copied to qa/ at runtime
 │   └── references/
 │       ├── playwright-patterns.md
-│       └── selector-strategies.md
+│       ├── selector-strategies.md
+│       └── exploration-toolkit.md
 ├── ios/
 │   ├── SKILL.md                  ← Stub (Q3 2026)
 │   └── references/xcuitest-patterns.md
@@ -129,7 +130,7 @@ skills/
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Latest version |
 | macOS (for macOS skill) | 12 Monterey or later |
 | Accessibility permission | Terminal → System Settings → Privacy & Security → Accessibility |
-| Python 3.9+ | For `skills/macos/explore.py` — stdlib only, no pip deps |
+| Python 3.9+ | For macOS explore script (inlined in SKILL.md, written to `qa/scripts/` at runtime) — stdlib only, no pip deps |
 | Node.js 20+ | For web skill (Playwright) |
 
 ### Install the Skill
@@ -170,8 +171,8 @@ Restart Claude Code. Invoke with `/native-qa` or `/native-qa init`.
 "generate flows and test cases for my macOS app"
 
 # Resume a saved session
-"Read qa/state-macos.md and continue QA for Figma"
-"Read qa/state-web.md and continue Phase 1. Next flow: F-003 — Dashboard"
+"Read qa/state.md and continue QA for Figma"
+"Read qa/state.md and continue Phase 1. Next flow: F-003 — Dashboard"
 
 # Update existing workspace
 "update test cases — I added a new feature"
@@ -222,9 +223,9 @@ Claude: ✅ Accessibility OK
   Phase 1 — Tracing F-001: App Launch...
   📸 Step 1/4 screenshots read. flow.md written.
 
-  ✅ Checkpoint saved to qa/state-macos.md
+  ✅ Checkpoint saved to qa/state.md
   Context reset recommended. To continue:
-  "Read qa/state-macos.md and continue Phase 1. Next flow: F-002 — File Management"
+  "Read qa/state.md and continue Phase 1. Next flow: F-002 — File Management"
 
 ... (repeat per flow, context reset after each) ...
 

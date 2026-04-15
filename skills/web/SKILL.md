@@ -1,6 +1,6 @@
 ---
 name: native-qa-web
-description: Autonomous QA skill for web applications using Playwright. Phase 1 explores every reachable page and traces each happy flow step-by-step with screenshots. Phase 2 generates full coverage test cases after credentials are provided.
+description: Autonomous QA skill for web applications using Playwright. Phase 1 discovers E2E user journeys via navigation graph analysis, then traces each journey end-to-end with screenshots. Phase 2 generates full coverage test cases after credentials are provided.
 platform: web
 status: beta
 version: 2.0.0
@@ -23,9 +23,9 @@ Two phases. Phase 1 = pure exploration (screenshots at every step, no TC generat
 
 ## Phase 1: Exploratory Discovery
 
-**Goal**: Map every reachable page and trace every happy flow end-to-end with screenshots.
-**Output**: `qa/knowledgebase/` full of screenshots + `flow.md` files with evidence tables.
-**Stop condition**: All public flows traced. Auth-gated flows documented as needing credentials.
+**Goal**: Map every reachable page, discover all E2E user journeys, and trace each journey end-to-end with screenshots.
+**Output**: `qa/knowledgebase/` (screenshots, nav graph, personas, journey inventory) + `qa/flows/F-NNN-*/flow.md` files with evidence tables.
+**Stop condition**: All discovered journeys traced or explicitly skipped with reason. Auth-gated journeys documented as needing credentials.
 **No TC generation in Phase 1.**
 
 ---
@@ -39,8 +39,8 @@ ls qa/knowledgebase/ui-inventory.md 2>/dev/null && echo "EXISTS" || echo "NONE"
 ls qa/context/ 2>/dev/null
 ```
 
-**If `qa/knowledgebase/ui-inventory.md` exists** — read it now. It contains the candidate flow list and known features extracted from any files the user dropped into `qa/context/`. Use this as your starting map:
-- Prioritize routes and flows named in the inventory — explore these first
+**If `qa/knowledgebase/ui-inventory.md` exists** — read it now. It contains the page inventory and known features extracted from any files the user dropped into `qa/context/`. Use this as your starting map:
+- Prioritize routes and pages named in the inventory — explore these first
 - If Figma screens were provided, you know the screen layouts — confirm visually via Playwright
 - If a PRD or spec was provided, you know the features and acceptance criteria — test against them
 
@@ -54,28 +54,29 @@ ls qa/context/ 2>/dev/null
 
 **This handler is active at every step. Whenever the user says "stop", "pause", "save state", or any equivalent — write the state file immediately. Do not just acknowledge.**
 
-1. **Write `qa/state-web.md` now** — capture everything known at this exact moment:
-   - Completed flows (with screenshot counts and key observations)
-   - In-progress flow (if mid-trace: note the `flow.md` already exists with observations up to the stopped step — resume will continue appending from here)
-   - Pending flows (names, priority, auth requirement)
+1. **Write `qa/state.md` now** — capture everything known at this exact moment:
+   - Completed journeys (with screenshot counts and key observations)
+   - In-progress journey (if mid-trace: note the `flow.md` already exists with observations up to the stopped step — resume will continue appending from here)
+   - Pending journeys (names, priority, auth requirement)
+   - Journey coverage: [N traced] / [N total] ([%])
    - App metadata (name, URL, auth method, plans/tiers)
    - Credentials status
    - Next action (exact resume point — e.g. "Resume F-003 trace from step 5, flow.md has steps 1-4 already written")
 
 2. **Tell the user**:
 
-> "✅ Checkpoint saved to `qa/state-web.md`
+> "✅ Checkpoint saved to `qa/state.md`
 >
 > | Saved | Value |
 > |-------|-------|
-> | Flows completed | [N] — [names] |
-> | In progress | [flow name, step reached] or None |
-> | Flows pending | [N] — [names] |
+> | Journeys completed | [N] / [Total] — [names] |
+> | In progress | [journey name, step reached] or None |
+> | Journeys pending | [N] — [names] |
 > | Screenshots taken | [N] |
 > | TCs written | [N] |
 >
-> **To resume**: open a new conversation and say:
-> `Read qa/state-web.md and continue QA for [AppName]`"
+> Type `/clear` now to reset context, then paste:
+> `Read qa/state.md and continue QA for [AppName]`"
 
 ---
 
@@ -86,10 +87,9 @@ Handled by main SKILL.md Steps 1-2. Confirm:
 - `QA_APP_URL` is set in `.env.qa`
 - `qa/knowledgebase/screenshots/` directory exists
 
-Then write the Playwright config to `qa/playwright.config.ts` using the Write tool:
+Then write the Playwright config to `qa/playwright.config.ts`:
 
 ```typescript
-// qa/playwright.config.ts — written by native-qa at init time. Do not edit manually.
 import { defineConfig, devices } from '@playwright/test';
 import path from 'path';
 import fs from 'fs';
@@ -98,17 +98,13 @@ const dotenvPath = path.resolve(process.cwd(), '.env.qa');
 if (fs.existsSync(dotenvPath)) {
   require('dotenv').config({ path: dotenvPath });
 } else {
-  throw new Error(
-    '.env.qa not found. Copy .env.example to .env.qa and fill in your values.\n' +
-    'See qa/credentials/access.md for the required fields.'
-  );
+  throw new Error('.env.qa not found. Copy .env.example to .env.qa and fill in your values.');
 }
-
 if (!process.env.QA_APP_URL) {
   throw new Error('QA_APP_URL is not set in .env.qa');
 }
 
-const CI       = !!process.env.CI;
+const CI = !!process.env.CI;
 const REPO_ROOT = process.cwd();
 const AUTH_FILE = path.join(REPO_ROOT, 'qa/.auth/user.json');
 
@@ -121,13 +117,11 @@ export default defineConfig({
   workers:       CI ? 4 : 2,
   timeout:       30_000,
   expect:        { timeout: 5_000 },
-
   reporter: [
     ['list'],
     ['html', { outputFolder: path.join(REPO_ROOT, 'playwright-report'), open: 'never' }],
     ['json', { outputFile: path.join(REPO_ROOT, 'qa/runs/playwright-results.json') }],
   ],
-
   use: {
     baseURL:           process.env.QA_APP_URL,
     trace:             'on-first-retry',
@@ -137,24 +131,22 @@ export default defineConfig({
     navigationTimeout: 15_000,
     locale:            'en-US',
   },
-
   projects: [
     { name: 'setup', testMatch: /auth\.setup\.ts/ },
     { name: 'chromium-public', use: { ...devices['Desktop Chrome'] } },
     {
-      name:         'chromium',
-      use:          { ...devices['Desktop Chrome'], storageState: AUTH_FILE },
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'], storageState: AUTH_FILE },
       dependencies: ['setup'],
     },
     { name: 'mobile-chrome', use: { ...devices['Pixel 7'] } },
   ],
-
   outputDir:   path.join(REPO_ROOT, 'qa/evidence/playwright/'),
   snapshotDir: path.join(REPO_ROOT, 'qa/knowledgebase/visual-baselines/'),
 });
 ```
 
-This file lives in `qa/` (gitignored, regenerated each session). All run commands use `--config qa/playwright.config.ts`.
+This reads all config from `.env.qa` dynamically — no hardcoded URLs or credentials. Write it fresh each session to `qa/` (gitignored). All run commands use `--config qa/playwright.config.ts`.
 
 ---
 
@@ -171,11 +163,21 @@ require('dotenv').config({ path: '.env.qa' });
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   
+  const { capture } = require('../scripts/qa-screenshot');
   await page.goto(process.env.QA_APP_URL, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(3000);
-  await page.screenshot({
-    path: 'qa/knowledgebase/screenshots/homepage-initial.png',
-    fullPage: true
+  // Adaptive wait — proceed when content renders or after 15s ceiling
+  await page.waitForFunction(
+    () => document.body.innerText.length > 100 && !document.body.innerText.includes('Loading'),
+    { timeout: 15000 }
+  ).catch(() => {});
+  // Use capture() — registers in seed-crawl flow.md, no orphans
+  await capture(page, {
+    flow: 'seed-crawl',
+    step: 1,
+    action: 'Homepage initial load',
+    observed: '(fill after Read)',
+    file: 'homepage-initial.png',
+    fullPage: true,
   });
   
   // Enumerate all links and buttons on the page
@@ -212,9 +214,21 @@ Record all discovered entry points in `qa/knowledgebase/ui-inventory.md`.
 
 Visit every reachable page with a headless Playwright crawl. For each page:
 1. Navigate to the URL
-2. Wait 2-3 seconds
-3. Take a full-page screenshot → `qa/knowledgebase/screenshots/page-[slug].png`
+2. Wait for content to render (use adaptive wait — see Performance section)
+3. Take a screenshot using `capture()` — this registers it in the seed crawl evidence:
+   ```javascript
+   await capture(page, {
+     flow: 'seed-crawl',  // special ID — creates qa/flows/seed-crawl/flow.md
+     step: N,
+     action: 'Crawl [page-name]',
+     observed: '(fill after Read)',
+     file: 'page-[slug].png',
+   });
+   ```
 4. Read the screenshot — note: page type, key elements, auth state, any redirects
+5. Update the observed column with findings
+
+**Important**: Use `capture()` for seed crawl screenshots too — this prevents orphans from the start. Create `qa/flows/seed-crawl/flow.md` before the crawl begins.
 
 **Seed URLs to visit** (adapt to the specific app):
 - `/` — homepage
@@ -232,29 +246,175 @@ For each URL, record in `qa/knowledgebase/ui-inventory.md`:
 |-----|-----------|----------|---------------|-------------|
 | / | homepage-initial.png | Marketing/Landing | No | H1, hero CTA, nav, FAQ |
 | /pricing | page-pricing.png | Pricing | No | Free/Pro cards, toggle, FAQ |
-| /account | page-account.png | Auth | No (redirects to here) | Sign-up form, Google SSO, X SSO |
+| /account | page-account.png | Auth | No (redirects to here) | Sign-up form, SSO buttons, email/password fields |
 | /dashboard | page-dashboard.png | App | Yes (redirects to /account) | — |
 ```
 
 ---
 
-### Step W-4: Happy Flow Tracing — Screenshot at Every Step
+### Step W-3b: Journey Discovery — Derive E2E User Journeys
 
-**This is the core of Phase 1.** For every identified happy flow, trace it as a real user would — one action at a time, screenshot after every action.
+**This is the critical planning step.** Before tracing anything, analyze the seed crawl data from W-2 and W-3 to discover every possible end-to-end user journey in the application. This must be dynamic — derived from observations, not hardcoded.
+
+#### W-3b.1: Build the Navigation Graph
+
+From the seed crawl page inventory (`qa/knowledgebase/ui-inventory.md`), construct a directed graph:
+
+```
+For each page:
+  - List every outbound link/CTA and where it leads
+  - Mark auth requirement (public / auth-gated / plan-gated)
+  - Mark page type (marketing / auth / app / content / legal / pricing)
+```
+
+Write this to `qa/knowledgebase/nav-graph.md`:
+
+```markdown
+## Navigation Graph
+
+| From | Action/CTA | To | Auth Gate |
+|------|-----------|-----|-----------|
+| [homepage URL] | [primary CTA text] | [target URL] | none |
+| [homepage URL] | [login link text] | [login URL] | none |
+| [homepage URL] | [nav link text] | [target URL] | none |
+| [auth page URL] | Submit sign-up form | [post-auth URL] | creates auth |
+| [auth page URL] | Submit sign-in form | [post-auth URL] | requires auth |
+| [app page URL] | [sidebar/nav link] | [target section] | requires auth |
+| [pricing URL] | [upgrade CTA text] | [payment flow] | requires auth + payment |
+```
+
+Populate with the actual URLs, CTA labels, and auth gates observed during the seed crawl. Every outbound link/CTA on every page becomes a row.
+
+#### W-3b.2: Identify User Personas
+
+From the navigation graph, derive personas by looking at:
+- **Auth boundaries** → at minimum 2 personas: unauthenticated visitor, authenticated user
+- **Plan/tier indicators** → Free vs Pro badges, upgrade CTAs, plan-gated features → split auth users by tier
+- **Onboarding presence** → wizard, setup steps → "new user" persona distinct from "returning user"
+- **Admin/power features** → config panels, debug tools, API management → "admin" persona
+- **Content sections** → blog, tutorial, community → "evaluator" persona
+
+Write to `qa/knowledgebase/personas.md`:
+
+```markdown
+## Discovered Personas
+
+| # | Persona | How Identified | Auth State | Entry Point |
+|---|---------|---------------|------------|-------------|
+| P1 | [name] | [what in the UI revealed this persona] | [None/Auth/Auth+Plan] | [entry URL] |
+| P2 | [name] | [evidence] | [auth state] | [entry URL] |
+```
+
+**Common persona patterns** (adapt based on what the seed crawl actually reveals):
+- Public visitor → identified by: public pages exist with sign-up CTAs
+- Evaluator → identified by: pricing/comparison/testimonial pages exist
+- New user → identified by: onboarding wizard or setup flow detected after auth
+- Returning user → identified by: sign-in form separate from sign-up, dashboard with existing data
+- Tiered users (Free/Pro/Enterprise) → identified by: plan badges, upgrade CTAs, gated features
+- Admin/Power user → identified by: settings panels, config pages, debug/log sections
+- Content consumer → identified by: blog, docs, tutorial, help center pages exist
+
+Only include personas that have **evidence in the seed crawl**. Do not invent personas the app doesn't support.
+
+#### W-3b.3: Map Goals per Persona
+
+For each persona, ask: **what does this person come to the app to accomplish?**
+
+Derive goals from:
+- **CTAs** → every CTA is a goal invitation (e.g. a "Get Started" button = goal: create account)
+- **Navigation sections** → every nav item is a feature area the user wants to reach
+- **Forms** → every form is a task the user wants to complete
+- **Auth gates** → crossing an auth gate is a sub-goal (sign up / sign in)
+- **State changes** → any action that changes visible state (timer starts, assistant created, device approved)
+
+#### W-3b.4: Derive Journeys — Path from Entry to Goal
+
+A **journey** = one persona + one goal + the complete path through the app to achieve it.
+
+**Algorithm:**
+```
+For each persona:
+  For each goal that persona has:
+    1. Start at the persona's entry point
+    2. Follow the navigation graph to reach the goal
+    3. Record every page/screen/state transition on the path
+    4. The path from entry to goal completion = one journey
+    5. If the path hits an auth gate → the sign-in/sign-up is part of the journey, not a separate flow
+    6. If the path hits a plan gate → the upgrade flow is part of the journey
+```
+
+**Deduplication rules:**
+- If two personas share the exact same path → merge into one journey, note both personas
+- If two goals share a common prefix (same first 5 steps, different endings) → keep as separate journeys
+- A sub-path that appears in 3+ journeys → still trace it each time (journeys are independent E2E runs)
+
+#### W-3b.5: Write Journey Inventory
+
+Write `qa/knowledgebase/journey-inventory.md`:
+
+```markdown
+## Journey Inventory
+
+**Total journeys discovered: [N]**
+**Coverage: 0/[N] traced (0%)**
+
+| # | Flow ID | Journey Name | Persona | Goal | Path Summary | Pages | Auth | Priority |
+|---|---------|-------------|---------|------|-------------|-------|------|----------|
+| 1 | F-001 | [Name] | P1: [persona] | [goal] | [entry] → [page] → ... → [end state] | [N] | [Yes/No] | P1 |
+| 2 | F-002 | [Name] | P2: [persona] | [goal] | [entry] → [page] → ... → [end state] | [N] | [Yes/No] | P1 |
+```
+
+**Priority rules:**
+- P1: Journeys that cross an auth boundary (sign-up, sign-in, onboarding) or involve the core product action
+- P2: Journeys within a single auth state (all-public or all-authenticated)
+- P3: Content/informational journeys (blog, tutorial, legal)
+
+#### W-3b.6: Present to User for Confirmation
+
+Tell the user:
+
+> "I've analyzed [AppName] and discovered **[N] end-to-end user journeys** across **[M] personas**:
+>
+> | # | Journey | Persona | Path | Priority |
+> |---|---------|---------|------|----------|
+> | F-001 | [Name] | [Persona] | [Entry] → ... → [End] | P1 |
+> | ... | | | | |
+>
+> This covers:
+> - **[N1]** public journeys (no auth)
+> - **[N2]** authenticated journeys (requires sign-in)
+> - **[N3]** plan-gated journeys (requires upgrade)
+>
+> Should I trace all [N], or would you like to adjust the list?"
+
+Wait for confirmation before proceeding to Step W-4.
+
+---
+
+### Step W-4: Journey Tracing — Screenshot at Every Step
+
+**This is the core of Phase 1.** For every discovered journey, trace it end-to-end as a real user would — one continuous browser session per journey, screenshot after every action.
+
+Each journey crosses multiple pages/features. The journey is the container; the features are steps within it.
 
 #### Naming convention
 ```
 qa/knowledgebase/screenshots/flow-[F-NNN-slug]-step[NN]-[description].png
 ```
 
-#### Flows to trace in Phase 1 (public, no login required)
+#### Directory structure
+```
+qa/flows/F-NNN-[slug]/
+├── flow.md             ← Full E2E journey trace with all evidence
+└── test-cases/         ← Phase 2: test cases for this journey
+```
 
-**For each flow — incremental write protocol:**
+#### For each journey — incremental write protocol:
 
-1. **Create `flow.md` immediately** — before opening the browser, create `qa/flows/F-NNN-[slug]/flow.md` with the header and an empty discovery evidence table:
+1. **Create `flow.md` immediately** — before opening the browser:
 
 ```markdown
-# F-NNN: [Flow Name]
+# F-NNN: [Journey Name]
 > ⚠️ IN PROGRESS — being traced. Do not use until marked complete.
 
 ## Summary
@@ -262,116 +422,105 @@ qa/knowledgebase/screenshots/flow-[F-NNN-slug]-step[NN]-[description].png
 |-------|-------|
 | **Flow ID** | F-NNN |
 | **Application** | [AppName] |
-| **URL / Base Route** | [route] |
+| **Persona** | [Persona name and description] |
+| **Goal** | [What the user is trying to accomplish] |
+| **Entry Point** | [Starting URL/state] |
+| **End State** | [Success condition] |
+| **Pages Crossed** | [N] |
+| **Auth Transition** | [None / Sign-up / Sign-in / Upgrade] |
+| **Priority** | P1 / P2 / P3 |
 | **Status** | IN PROGRESS |
 
 ## Discovery Evidence
 
-| Step | Action | Screenshot | Observed |
-|------|--------|-----------|---------|
+| Step | Page/Screen | Action | Screenshot | Observed |
+|------|------------|--------|-----------|---------|
 ```
 
-2. Open a fresh browser context (no cookies)
+2. Open a fresh browser context (clean state matching the persona's starting condition)
 
-3. For each step in the happy path — do ALL of the following before moving to the next step:
+3. For each step in the journey — do ALL of the following before moving to the next step:
    - Perform the action
-   - `await page.screenshot({ path: '...', fullPage: true })`
-   - **Read the screenshot** with the Read tool
-   - **Immediately append the observation** to the discovery evidence table in `flow.md`:
-   ```markdown
-   | 1 | Navigate to homepage | `flow-F001-step01-load.png` | Hero section visible; "Secure OpenClaw in 60 seconds" headline; Sign up + Download CTA buttons; nav: Resources, Log in, Sign up |
+   - **Use the `capture()` utility** to screenshot AND register in flow.md atomically:
+   ```javascript
+   const { capture } = require('../scripts/qa-screenshot');
+   const result = await capture(page, {
+     flow: 'F-001-new-user-onboarding',
+     step: 1,
+     action: 'Land on homepage',
+     observed: '(filled after Read)',
+     file: 'flow-F001-step01-homepage.png',
+     fullPage: true,
+   });
    ```
-   Write the full observation — every visible element, label, state, layout detail. Do not summarize — capture everything Claude sees in that screenshot.
+   - **Read the screenshot** with the Read tool
+   - **Update the observed column** with full observations
+   - **Note the page/feature** being crossed in the `Page/Screen` column — this captures feature-level detail within the journey
 
-4. **Finalize `flow.md`** — after all steps are traced, fill in remaining sections (User Journey table, Success Outcome, Playwright skeleton) and remove the `⚠️ IN PROGRESS` warning. Mark status as `COMPLETE`.
+   The utility is **idempotent** — if the screenshot is already referenced, it skips.
+   This prevents orphaned screenshots: every capture is registered at the moment it's taken.
 
----
+   **Fallback (manual)**: If not using the utility, you MUST append the row to flow.md immediately after screenshot. Do not defer.
 
-##### Flow F-001: Homepage & Navigation
+4. **At auth boundaries** — when the journey crosses a sign-up/sign-in gate:
+   - Screenshot the auth form
+   - Fill credentials (from `.env.qa` or ask user)
+   - Screenshot each auth step
+   - Continue the journey on the other side of the gate
+   - Do NOT stop and create a separate "auth flow" — auth is part of this journey
 
-Trace: load → scroll sections → click nav links → click CTAs
+5. **Finalize `flow.md`** — after all steps are traced, fill in remaining sections and mark as `COMPLETE`.
 
-```javascript
-// Step 1: Initial load
-await page.goto(process.env.QA_APP_URL, { waitUntil: 'domcontentloaded' });
-await page.waitForTimeout(3000);
-await page.screenshot({ path: 'qa/knowledgebase/screenshots/flow-F001-step01-load.png', fullPage: true });
-
-// Step 2: Scroll to mid-page
-await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-await page.waitForTimeout(1000);
-await page.screenshot({ path: 'qa/knowledgebase/screenshots/flow-F001-step02-scroll-mid.png', fullPage: false });
-
-// Step 3: Scroll to bottom
-await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-await page.waitForTimeout(1000);
-await page.screenshot({ path: 'qa/knowledgebase/screenshots/flow-F001-step03-scroll-bottom.png', fullPage: false });
-
-// Step 4: Click Pricing nav link
-await page.evaluate(() => window.scrollTo(0, 0));
-const pricingLink = page.locator('nav, header').first().getByRole('link', { name: /pricing/i }).first();
-await pricingLink.click();
-await page.waitForTimeout(2000);
-await page.screenshot({ path: 'qa/knowledgebase/screenshots/flow-F001-step04-pricing-page.png', fullPage: true });
-
-// Step 5: Go back, click Resources (if exists)
-await page.goto(process.env.QA_APP_URL, { waitUntil: 'domcontentloaded' });
-await page.waitForTimeout(2000);
-// Try to find Resources dropdown
-const resourcesBtn = page.locator('nav, header').first().getByRole('button', { name: /resources/i });
-if (await resourcesBtn.isVisible().catch(() => false)) {
-  await resourcesBtn.click();
-  await page.waitForTimeout(1000);
-  await page.screenshot({ path: 'qa/knowledgebase/screenshots/flow-F001-step05-resources-dropdown.png', fullPage: false });
-}
-```
-
-Read each screenshot after capture. Record observations.
+6. **Update `qa/knowledgebase/journey-inventory.md`** — mark this journey as traced, record step count and screenshot count.
 
 ---
 
-##### Flow F-002: Authentication (public-facing form only)
+##### Example: Tracing a Journey
 
-Trace: navigate to /account → observe form → fill sign-up form → observe validation states.
-**Note**: Do NOT submit with real credentials in Phase 1. Trace up to the form-filled state only.
+The agent writes Playwright steps dynamically based on what the journey requires. No hardcoded URLs or selectors — discover elements from screenshots at each step.
 
 ```javascript
-// Step 1: Navigate to /account
-await page.goto(process.env.QA_APP_URL + 'account', { waitUntil: 'domcontentloaded' });
-await page.waitForTimeout(3000);
-await page.screenshot({ path: 'qa/knowledgebase/screenshots/flow-F002-step01-account-page.png', fullPage: true });
+const { capture } = require('../scripts/qa-screenshot');
 
-// Step 2: Observe sign-up form elements
-// Read screenshot — note: fields visible, SSO buttons, toggle to sign-in
-await page.screenshot({ path: 'qa/knowledgebase/screenshots/flow-F002-step02-signup-form.png', fullPage: false });
+// Step 1: Start at the journey's entry point
+await page.goto(process.env.QA_APP_URL, { waitUntil: 'domcontentloaded' });
+// Adaptive wait — proceed when content renders
+await page.waitForFunction(
+  () => document.body.innerText.length > 100 && !document.body.innerText.includes('Loading'),
+  { timeout: 15000 }
+).catch(() => {});
+await capture(page, {
+  flow: 'F-001-[flow-slug]',
+  step: 1,
+  action: 'Land on entry page',
+  page: 'Homepage `/`',
+  observed: '(fill after Read)',
+  file: 'flow-F001-step01-entry.png',
+});
+// READ screenshot → describe what's visible → update observed column
 
-// Step 3: Click "Sign in" toggle (if visible) to see sign-in form
-const signinLink = page.getByText(/sign in/i).or(page.getByText(/already have/i)).first();
-if (await signinLink.isVisible().catch(() => false)) {
-  await signinLink.click();
-  await page.waitForTimeout(1000);
-  await page.screenshot({ path: 'qa/knowledgebase/screenshots/flow-F002-step03-signin-form.png', fullPage: false });
-}
+// Step 2: Follow the primary CTA toward the goal
+// (discover the CTA text/selector from the screenshot, don't hardcode)
+const primaryCTA = page.getByRole('link', { name: /[CTA text from screenshot]/i }).first();
+await primaryCTA.click();
+await page.waitForTimeout(500); // brief UI settle after click
+await capture(page, {
+  flow: 'F-001-[flow-slug]',
+  step: 2,
+  action: 'Click primary CTA',
+  page: '[target page] `[URL]`',
+  observed: '(fill after Read)',
+  file: 'flow-F001-step02-after-cta.png',
+});
+// READ → describe → continue
 
-// Step 4: Go back to sign-up, fill email (observe email field behavior)
-await page.goto(process.env.QA_APP_URL + 'account', { waitUntil: 'domcontentloaded' });
-await page.waitForTimeout(2000);
-const emailField = page.getByLabel(/email/i).or(page.getByPlaceholder(/email/i)).first();
-if (await emailField.isVisible().catch(() => false)) {
-  await emailField.fill('test@example.com');
-  await page.screenshot({ path: 'qa/knowledgebase/screenshots/flow-F002-step04-email-filled.png', fullPage: false });
-}
-
-// Step 5: Try empty form submit (observe validation)
-const submitBtn = page.getByRole('button', { name: /sign up/i }).first();
-if (await submitBtn.isVisible().catch(() => false)) {
-  await page.goto(process.env.QA_APP_URL + 'account', { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(2000);
-  await submitBtn.click().catch(() => {});
-  await page.waitForTimeout(1000);
-  await page.screenshot({ path: 'qa/knowledgebase/screenshots/flow-F002-step05-empty-validation.png', fullPage: false });
-}
+// Step 3+: Continue until the journey's goal state is reached
+// If an auth gate appears → handle it inline (fill credentials, submit)
+// If a form appears → fill it, screenshot before and after submit
+// If a new page loads → screenshot and document it in the Page/Screen column
 ```
+
+**Key principle**: each journey is a continuous browser session. Do NOT close the browser between pages. Auth transitions, form submissions, redirects — they all happen within the same session, just like a real user.
 
 ---
 
@@ -404,7 +553,7 @@ Store the selected plan in `.qa-config.json` as `QA_ACCOUNT_TIER`. Use it throug
 
 4. **Then ask for credentials** — using the exact field names from the screenshot:
 
-> "**[Flow Name]** needs access to continue.
+> "**[Journey Name]** needs access to continue.
 >
 > The app is asking for: **[exact credential type — e.g. "an OpenAI API key", "email + password", "a Pro plan", "an invite code"]**
 >
@@ -452,66 +601,75 @@ If gated (invite only, CAPTCHA, paid plan, no signup form visible) → tell user
 
 **Option 4 — Skip:**
 - Append to `flow.md` discovery evidence table: `⛔ Access required — [exact credential type] — deferred to Phase 2`
-- Note in `qa/state-web.md` under pending flows: flow name + exact credential type needed
-- Continue to the next public flow
+- Note in `qa/state.md` under pending journeys: journey name + exact credential type needed
+- Continue to the next journey
 
 ---
 
-##### Flow F-003 and beyond: App-specific flows
+##### Subsequent journeys
 
-For each additional flow identified (pricing CTAs, feature sections, etc.), apply the same tracing protocol:
-1. Write inline Playwright steps
-2. Screenshot after every action
-3. Read every screenshot
-4. Document in flow.md
-
----
-
-### Step W-4b: Context Reset After Each Flow
-
-After tracing a flow and reading all its screenshots:
-
-1. Write `qa/flows/F-NNN-[slug]/flow.md` with the discovery evidence table
-2. Append to `qa/state-web.md` — mark this flow as done, list the next flow pending
-3. Tell the user:
-   > "Flow **F-NNN — [name]** traced ✅ ([N] screenshots). Context reset recommended.
-   > **Resume**: `Read qa/state-web.md and continue Phase 1. Next flow: F-[NNN+1] — [name].`"
-
-Do NOT continue to the next flow in the same context after reading 3+ flows worth of screenshots.
+For each remaining journey in the inventory, apply the same tracing protocol:
+1. Open a fresh browser context matching the persona's starting state
+2. Write inline Playwright steps following the journey's path
+3. Use `capture()` for every screenshot — atomic registration
+4. Read every screenshot, document in flow.md
+5. Update journey-inventory.md coverage count after each journey
 
 ---
 
-### Step W-5: Document Flows
+### Step W-4b: Context Reset After Each Journey
 
-For each traced flow, create `qa/flows/F-NNN-[slug]/flow.md`. The flow.md for web includes:
-- Summary metadata table
-- UI Elements table (form fields, buttons, links, sections found)
-- User Journey steps table
-- **Discovery Evidence table** — every screenshot with observed state
-- Note any flows that are auth-gated ("requires credentials — trace in Phase 2")
+After tracing a journey and reading all its screenshots:
 
-Include in the flow.md:
+1. Finalize `qa/flows/F-NNN-[slug]/flow.md` with the discovery evidence table
+2. **Run lightweight screenshot coverage check** (see Key Rules > Performance #12 for the inline script). If orphans found, register them with `node scripts/qa-screenshot.js` before moving on.
+3. Update `qa/knowledgebase/journey-inventory.md` — mark this journey as traced, update coverage count
+4. Append to `qa/state.md` — mark this journey as done, list the next journey pending
+5. Tell the user:
+   > "Journey **F-NNN — [name]** traced ✅ ([N] steps, [M] screenshots, [P] pages crossed).
+   > Coverage: [X]/[Total] journeys ([%]).
+   >
+   > Type `/clear` now to reset context, then paste:
+   > `Read qa/state.md and continue Phase 1. Next: F-[NNN+1] — [name].`"
+
+Do NOT continue to the next journey in the same context after reading 3+ journeys worth of screenshots.
+
+---
+
+### Step W-5: Document Journeys
+
+Each journey is documented in `qa/flows/F-NNN-[slug]/flow.md`. The flow.md includes:
+- Summary metadata table (persona, goal, entry point, end state, pages crossed, auth transitions)
+- **Discovery Evidence table** — every step with page/screen, action, screenshot, and observation
+- UI Elements table — all interactive elements encountered across the journey
+- Feature checkpoints — which features/pages were crossed and what was observed at each
+- Auth boundary notes — how sign-up/sign-in/upgrade was handled within the journey
+
+The evidence table has an extra `Page/Screen` column compared to feature-level flows:
 ```markdown
-## Discovery Evidence — Happy Path Screenshots
+## Discovery Evidence
 
-| Step | Action | Screenshot | Observed |
-|------|--------|-----------|---------|
-| 1 | Navigate to /account | `flow-F002-step01-account-page.png` | Sign-up form; Google + X SSO; "Already have an account? Sign in" link |
-| 2 | Observe sign-up form | `flow-F002-step02-signup-form.png` | Email field, Password field, Confirm Password field, Sign up button |
-| 3 | Click Sign in toggle | `flow-F002-step03-signin-form.png` | Email + Password only; no confirm field; "Forgot password?" link |
-| 4 | Fill email field | `flow-F002-step04-email-filled.png` | Email value "test@example.com" shown; no immediate validation |
-| 5 | Empty submit click | `flow-F002-step05-empty-validation.png` | Validation errors: "Email is required", "Password is required" |
+| Step | Page/Screen | Action | Screenshot | Observed |
+|------|------------|--------|-----------|---------|
+| 1 | [page name] `[URL]` | [what user did] | `flow-F001-step01-[slug].png` | [what was visible on screen] |
+| 2 | [page name] `[URL]` | [next action] | `flow-F001-step02-[slug].png` | [observations] |
+| 3 | [auth page] `[URL]` | [fill form / submit] | `flow-F001-step03-[slug].png` | [auth form elements, validation] |
+| 4 | [post-auth page] `[URL]` | [observe new state] | `flow-F001-step04-[slug].png` | [what changed after auth] |
 ```
+
+Each row captures the **page the user is on** + **what they did** + **what they saw**. The `Page/Screen` column is what gives feature-level visibility within the journey.
+
+This captures **which page the user is on at each step** — giving both journey-level and feature-level visibility in one document.
 
 ---
 
 ### Step W-6: Save Exploration Knowledge Base
 
-Write `qa/knowledgebase/ui-inventory.md` with:
-- Page inventory table (all crawled URLs)
-- Element inventory (buttons, forms, nav items per page)
-- Flow inventory (all traced happy flows with screenshot counts)
-- Auth-gated flows list (flows to trace in Phase 2)
+Write/update `qa/knowledgebase/` with:
+- `ui-inventory.md` — Page inventory table (all crawled URLs), element inventory per page
+- `nav-graph.md` — Navigation graph (from W-3b.1)
+- `personas.md` — Discovered personas (from W-3b.2)
+- `journey-inventory.md` — All journeys with coverage status (from W-3b.5, updated after each trace)
 - App-specific observations (SPA routes, redirect behavior, widget quirks)
 
 ---
@@ -519,9 +677,64 @@ Write `qa/knowledgebase/ui-inventory.md` with:
 ## Phase 1 → Phase 2 Handoff
 
 After Step W-6, the main SKILL.md **Phase 1 Complete Gate** takes over. It:
-1. Writes the checkpoint to `qa/state-web.md`
-2. Tells the user which flows need credentials
-3. Waits for the user to populate `.env.qa`
+
+1. **Hard gate — verify journey coverage**:
+   ```bash
+   node -e "
+   const fs = require('fs');
+   const inv = fs.readFileSync('qa/knowledgebase/journey-inventory.md', 'utf8');
+   const total = (inv.match(/\| J-\d+/g) || []).length;
+   const traced = (inv.match(/TRACED|COMPLETE/gi) || []).length;
+   const skipped = (inv.match(/SKIPPED/gi) || []).length;
+   const pending = total - traced - skipped;
+   console.log('Total:', total, '| Traced:', traced, '| Skipped:', skipped, '| Pending:', pending);
+   if (pending > 0) { console.error('❌ BLOCKED —', pending, 'journeys not traced or skipped'); process.exit(1); }
+   console.log('✅ All journeys accounted for');
+   "
+   ```
+   If any journey is neither traced nor explicitly skipped with a reason → **stop and trace it** before proceeding.
+
+2. **Screenshot coverage gate** — run Allure generator (blocks if orphaned screenshots exist)
+3. Writes the checkpoint to `qa/state.md`
+4. Tells the user which journeys need credentials for deeper tracing
+5. **Generates the Phase 1 Allure report** (discovery summary with screenshots)
+6. Waits for the user to populate `.env.qa`
+
+### Phase 1 Allure Report
+
+After the checkpoint is written, generate the Allure discovery report:
+
+```bash
+# Generate allure-results from discovery data (flow.md + screenshots)
+node scripts/allure/generate-phase1-report.js
+
+# Build the HTML report
+npx allure generate allure-results -o allure-report --clean
+
+# Open in browser
+npx allure open allure-report
+```
+
+Or use the npm script shortcut:
+
+```bash
+npm run allure:phase1:open
+```
+
+Tell the user:
+
+> "**Phase 1 Allure Report** generated at `allure-report/index.html`
+>
+> The report includes:
+> - **Product: [AppName]** — all results labeled with the product/system name
+> - Discovery summary (app metadata, platform, journey count, coverage %)
+> - One entry per traced journey with step-by-step discovery evidence
+> - Screenshots attached to each discovery step
+> - Journey priority and auth-requirement labels
+> - Persona and goal metadata per journey
+> - Environment info (app, platform, OS)
+>
+> Run `npm run allure:open` to view it again."
 
 ---
 
@@ -540,9 +753,10 @@ After Step W-6, the main SKILL.md **Phase 1 Complete Gate** takes over. It:
 Before asking the user for anything, read every auth/login/onboarding/settings screenshot captured in Phase 1 using the Read tool:
 
 ```
-qa/knowledgebase/screenshots/flow-F002-auth-step01-*.png
-qa/knowledgebase/screenshots/flow-F003-onboarding-*.png
-... (all auth-related screenshots)
+qa/knowledgebase/screenshots/journey-*-signin-*.png
+qa/knowledgebase/screenshots/journey-*-auth-*.png
+qa/knowledgebase/screenshots/journey-*-onboarding-*.png
+... (all auth-related screenshots from Phase 1 journeys)
 ```
 
 From the screenshots, identify **every credential field actually visible in the UI**. Common possibilities (not an exhaustive list):
@@ -565,7 +779,7 @@ From the screenshots, identify **every credential field actually visible in the 
 
 After identifying the actual fields, tell the user exactly what is needed and offer the three options:
 
-> "To trace **[F-NNN — Flow Name]**, I can see from the screenshots that the app needs:
+> "To trace **[F-NNN — Journey Name]**, I can see from the screenshots that the app needs:
 >
 > | Field seen in UI | Env key I'll use |
 > |-----------------|-----------------|
@@ -614,29 +828,49 @@ echo "QA_[FIELD_NAME]=provided-value" >> .env.qa
 Only run this if Phase 1 screenshots confirmed an email + password signup form exists. Read each screenshot as you go:
 
 ```javascript
+const { capture } = require('../scripts/qa-screenshot');
 const ts = Date.now();
 const testEmail = `qatest-${ts}@mailinator.com`;
 const testPassword = `QAtest${ts}!`;
 
-// Navigate to signup (URL from Phase 1 screenshots)
-await page.goto('/account', { waitUntil: 'domcontentloaded' });
-await page.waitForTimeout(2000);
-await page.screenshot({ path: 'qa/knowledgebase/screenshots/self-reg-step01.png', fullPage: false });
+// Navigate to signup (URL from Phase 1 nav-graph.md — not hardcoded)
+const signupURL = '...'; // ← read from qa/knowledgebase/nav-graph.md
+await page.goto(signupURL, { waitUntil: 'domcontentloaded' });
+await page.waitForFunction(
+  () => document.body.innerText.length > 50, { timeout: 15000 }
+).catch(() => {});
+await capture(page, {
+  flow: 'F-NNN-[flow-slug]', step: N,
+  action: 'Navigate to signup page',
+  observed: '(fill after Read)',
+  file: 'flow-FNNN-stepNN-self-reg-form.png',
+});
 // READ — confirm what fields are on screen before filling
 
-// Fill exactly the fields visible in the screenshot
-// DO NOT fill fields that are not visible
+// Fill exactly the fields visible in the screenshot — DO NOT fill fields that are not visible
 await page.getByLabel(/email/i).or(page.getByPlaceholder(/email/i)).first().fill(testEmail);
 // ... fill other fields as seen in screenshot
 
-await page.screenshot({ path: 'qa/knowledgebase/screenshots/self-reg-step02-filled.png' });
+await capture(page, {
+  flow: 'F-NNN-[flow-slug]', step: N + 1,
+  action: 'Fill self-registration form',
+  observed: '(fill after Read)',
+  file: 'flow-FNNN-stepNN-self-reg-filled.png',
+});
 // READ — verify before submitting
 
 await page.getByRole('button', { name: /sign up/i }).first().click();
-await page.waitForTimeout(4000);
-await page.screenshot({ path: 'qa/knowledgebase/screenshots/self-reg-step03-result.png', fullPage: true });
+await page.waitForFunction(
+  () => !document.body.innerText.includes('Loading'), { timeout: 15000 }
+).catch(() => {});
+await capture(page, {
+  flow: 'F-NNN-[flow-slug]', step: N + 2,
+  action: 'Submit self-registration',
+  observed: '(fill after Read)',
+  file: 'flow-FNNN-stepNN-self-reg-result.png',
+  fullPage: true,
+});
 // READ — where did we land? success / email verification / onboarding / error?
-// If email verification: check https://www.mailinator.com/v4/public/inboxes.jsp?to=qatest-[ts]
 // If onboarding needs MORE credentials (e.g., API key) → loop back to Step W-7b for those fields
 ```
 
@@ -650,41 +884,67 @@ await page.screenshot({ path: 'qa/knowledgebase/screenshots/self-reg-step03-resu
 | TOTP / 2FA | Requires seed enrollment | User provides TOTP seed via Option 2 |
 | Enterprise SSO / SAML | Requires IDP | Mark as out-of-scope in flow.md |
 
-**Never block Phase 2** for non-automatable credentials. Write a "Credential Note" in the affected `flow.md`, provide the best alternative, and continue with other flows.
+**Never block Phase 2** for non-automatable credentials. Write a "Credential Note" in the affected `flow.md`, provide the best alternative, and continue with other journeys.
 
 ---
 
-### Step W-8: Authenticated Flow Tracing
+### Step W-8: Authenticated Journey Tracing
 
-After credentials are resolved:
+After credentials are resolved, continue tracing auth-gated journeys. Auth is part of the journey — not a separate step.
 
 ```javascript
 require('dotenv').config({ path: '.env.qa' });
+const { capture } = require('../scripts/qa-screenshot');
 const { QA_TEST_EMAIL, QA_TEST_PASSWORD, QA_APP_URL } = process.env;
 
-const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage();
+// Reuse browser from session, fresh context for clean auth state
+const context = await browser.newContext();
+const page = await context.newPage();
 
-await page.goto(QA_APP_URL + 'account', { waitUntil: 'domcontentloaded' });
-await page.waitForTimeout(2000);
+// Navigate to the auth page discovered in Phase 1 (use URL from nav-graph.md, not hardcoded)
+const authURL = '...'; // ← read from qa/knowledgebase/nav-graph.md
+await page.goto(QA_APP_URL + authURL, { waitUntil: 'domcontentloaded' });
+await page.waitForFunction(
+  () => document.body.innerText.length > 50,
+  { timeout: 15000 }
+).catch(() => {});
 
-// Switch to sign-in form
-const signinLink = page.getByText(/sign in/i).or(page.getByText(/already have/i)).first();
-if (await signinLink.isVisible().catch(() => false)) await signinLink.click();
-await page.waitForTimeout(1000);
+// Discover the sign-in form elements from the screenshot — don't assume field names
+await capture(page, {
+  flow: 'F-NNN-[flow-slug]',
+  step: N,
+  action: 'Navigate to auth page',
+  observed: '(fill after Read)',
+  file: 'flow-FNNN-stepNN-auth-page.png',
+});
+// READ screenshot → identify exact field selectors → fill credentials
 
-// Fill credentials
 await page.getByLabel(/email/i).or(page.getByPlaceholder(/email/i)).first().fill(QA_TEST_EMAIL);
 await page.getByLabel(/password/i).or(page.getByPlaceholder(/password/i)).first().fill(QA_TEST_PASSWORD);
-await page.screenshot({ path: 'qa/knowledgebase/screenshots/flow-F002-auth-step06-filled.png', fullPage: false });
+await capture(page, {
+  flow: 'F-NNN-[flow-slug]',
+  step: N + 1,
+  action: 'Fill credentials',
+  observed: '(fill after Read)',
+  file: 'flow-FNNN-stepNN-creds-filled.png',
+});
 
 await page.getByRole('button', { name: /sign in/i }).first().click();
-await page.waitForTimeout(3000);
-await page.screenshot({ path: 'qa/knowledgebase/screenshots/flow-F002-auth-step07-post-signin.png', fullPage: true });
-// Read this screenshot — where did user land? (dashboard / onboarding / error?)
+await page.waitForFunction(
+  () => !document.body.innerText.includes('Loading') && document.body.innerText.length > 100,
+  { timeout: 15000 }
+).catch(() => {});
+await capture(page, {
+  flow: 'F-NNN-[flow-slug]',
+  step: N + 2,
+  action: 'Submit sign-in',
+  observed: '(fill after Read)',
+  file: 'flow-FNNN-stepNN-post-signin.png',
+});
+// READ screenshot → continue the journey from the post-auth page
 ```
 
-Continue tracing each authenticated flow (dashboard, settings, account, skills, etc.) with screenshots at every step.
+Continue tracing the journey through authenticated sections (dashboard, settings, etc.) with `capture()` at every step.
 
 ---
 
@@ -728,7 +988,7 @@ For each scenario, write `TC-NNN-[slug].md` with embedded Playwright TypeScript.
 | Field | Value |
 |-------|-------|
 | **TC ID** | TC-NNN |
-| **Flow** | F-NNN — [Flow Name] |
+| **Flow** | F-NNN — [Journey Name] |
 | **Scenario** | S-NNN-NN — [Scenario] |
 | **Priority** | P1/P2/P3 |
 | **Platform** | Web — Chromium |
@@ -753,12 +1013,17 @@ import { test, expect } from '@playwright/test';
 test('TC-NNN: [description]', async ({ page }) => {
   // relative URL — baseURL from .env.qa → qa/playwright.config.ts
   await page.goto('/path', { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(2000);
+  // Wait for content to render (adaptive)
+  await page.waitForFunction(
+    () => document.body.innerText.length > 50,
+    { timeout: 15000 }
+  ).catch(() => {});
   
   // assertions
   await expect(page.locator('[selector]')).toBeVisible();
   
-  // evidence
+  // evidence — TCs use raw Playwright screenshots (they run independently via test runner,
+  // not the QA skill session — capture() is for Phase 1 discovery only)
   await page.screenshot({ path: 'qa/knowledgebase/screenshots/TC-NNN-pass.png', fullPage: true });
 });
 \`\`\`
@@ -777,33 +1042,158 @@ test('TC-NNN: [description]', async ({ page }) => {
 
 ### Step W-11: Extract Specs and Run
 
-After all TCs are written:
+After all TCs are written, extract the Playwright TypeScript from each TC-*.md into runnable .spec.ts files:
+
+```javascript
+// Extract specs inline — find all TC-*.md, pull out ```typescript blocks, write .spec.ts
+const fs = require('fs');
+const path = require('path');
+
+function findTCs(dir) {
+  const results = [];
+  if (!fs.existsSync(dir)) return results;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) results.push(...findTCs(p));
+    else if (e.name.startsWith('TC-') && e.name.endsWith('.md')) results.push(p);
+  }
+  return results;
+}
+
+for (const tc of findTCs('qa')) {
+  const content = fs.readFileSync(tc, 'utf8');
+  const match = content.match(/```typescript\s*\n([\s\S]*?)```/);
+  if (!match) { console.log('⚠ No TS block:', tc); continue; }
+  const specPath = tc.replace(/\.md$/, '.spec.ts');
+  fs.writeFileSync(specPath, match[1].trim() + '\n');
+  console.log('✅', path.relative('.', specPath));
+}
+```
+
+Then run the tests:
 
 ```bash
-# Extract TypeScript code blocks from TC-*.md into runnable .spec.ts files
-node qa/extract-specs.js
-
 # Run public tests (no auth)
 npx playwright test --project chromium-public --config qa/playwright.config.ts
 
 # Set up auth session (one-time)
 npx playwright test --project setup --config qa/playwright.config.ts
 
-# Run all tests
+# Run all tests (allure-playwright reporter auto-generates allure-results)
 npx playwright test --config qa/playwright.config.ts
 
 # Run specific TC
 npx playwright test --grep "TC-001" --config qa/playwright.config.ts
 ```
 
+### Step W-12: Phase 2 Allure Report
+
+After test execution completes, generate the Phase 2 Allure report:
+
+```bash
+# Enrich allure-results with coverage metadata from TC files
+node scripts/allure/generate-phase2-report.js
+
+# Build the HTML report
+npx allure generate allure-results -o allure-report --clean
+
+# Open in browser
+npx allure open allure-report
+```
+
+Or use the npm script shortcut:
+
+```bash
+npm run allure:phase2:open
+```
+
+> **Note**: The `allure-playwright` reporter in `qa/playwright.config.ts` automatically writes
+> test execution results (pass/fail, duration, screenshots, traces) to `allure-results/` during
+> the Playwright test run. The `generate-phase2-report.js` script adds coverage metadata
+> (scenario categories, flow mappings, TC metadata) on top of those results.
+
+Tell the user:
+
+> "**Phase 2 Allure Report** generated at `allure-report/index.html`
+>
+> The report includes:
+> - Full test execution results (pass/fail/broken with error details)
+> - Screenshots and traces on failure
+> - Coverage overview (scenarios per journey, category breakdown)
+> - Test timeline and duration analysis
+> - Environment info and test history
+>
+> Run `npm run allure:open` to view it again."
+
 ---
 
 ## Key Rules — Web Skill
 
+### Correctness
+
 1. **Never hardcode URLs** — always `process.env.QA_APP_URL` or `page.goto('/')` (relative)
 2. **Never hardcode credentials** — always `process.env.QA_TEST_EMAIL`, `process.env.QA_TEST_PASSWORD`
-3. **Never use `networkidle`** — use `domcontentloaded` + `waitForTimeout(2000-3000)` for SPAs
-4. **Screenshot at every step in Phase 1** — evidence first, test cases second
-5. **Credentials gate** — do not write TCs until user confirms `.env.qa` is populated
-6. **Relative URLs only** in test files — `'/'` not `'https://app.example.com/'`
-7. **Scope nav selectors** to `page.locator('nav, header').first()` — avoid footer duplicates
+3. **Never use `networkidle`** — use `domcontentloaded` + adaptive wait (see Performance below)
+4. **Always use `capture()`** for screenshots — never raw `page.screenshot()` — prevents orphans
+5. **Screenshot at every step in Phase 1** — evidence first, test cases second
+6. **Credentials gate** — do not write TCs until user confirms `.env.qa` is populated
+7. **Relative URLs only** in test files — `'/'` not `'https://app.example.com/'`
+8. **Scope nav selectors** to `page.locator('nav, header').first()` — avoid footer duplicates
+
+### Performance
+
+9. **Adaptive waits instead of fixed timeouts** — never `waitForTimeout(3000)` blindly:
+   ```javascript
+   // ❌ Bad — wastes 3s on fast apps, too short on slow SPAs
+   await page.waitForTimeout(3000);
+
+   // ✅ Good — wait for actual content, with a ceiling
+   await page.waitForFunction(
+     () => document.body.innerText.length > 100 && !document.body.innerText.includes('Loading'),
+     { timeout: 15000 }
+   ).catch(() => {}); // fallback: proceed after 15s even if still loading
+   ```
+   Use `waitForFunction()` to detect when content has rendered. Only use `waitForTimeout()` for brief UI settle time (500-1000ms after clicks).
+
+10. **Viewport screenshots by default** — only use `fullPage: true` when you need the below-fold content:
+    ```javascript
+    // Default: viewport only (fast, small file)
+    await capture(page, { ..., fullPage: false });
+
+    // Full page: only for landing pages, long forms, full inventories
+    await capture(page, { ..., fullPage: true });
+    ```
+
+11. **Reuse browser, fresh context** — launch browser once per session, create new context per journey:
+    ```javascript
+    // ❌ Bad — cold browser launch per journey (2-3s each)
+    const browser = await chromium.launch();
+
+    // ✅ Good — launch once, new context per journey (200ms each)
+    // Browser launched at session start
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    // ... trace journey ...
+    await context.close(); // clean state for next journey
+    ```
+
+12. **Lightweight coverage check** — don't run the full Allure generator just to verify coverage:
+    ```bash
+    # ❌ Bad — generates all Allure results just to check coverage
+    node scripts/allure/generate-phase1-report.js 2>&1 | head -5
+
+    # ✅ Good — check screenshot coverage directly (instant)
+    node -e "
+    const fs=require('fs'),p=require('path'),QA='qa';
+    const disk=new Set(fs.readdirSync(p.join(QA,'knowledgebase','screenshots')).filter(f=>f.endsWith('.png')));
+    const refs=new Set();
+    for(const d of['flows','features']){const b=p.join(QA,d);if(!fs.existsSync(b))continue;
+    for(const s of fs.readdirSync(b)){for(const f of['flow.md','overview.md']){
+    const fp=p.join(b,s,f);if(!fs.existsSync(fp))continue;
+    const c=fs.readFileSync(fp,'utf8');let m;const r=/[a-zA-Z0-9_-]+\\.png/g;
+    while(m=r.exec(c))refs.add(m[0]);}}}
+    const orphaned=[...disk].filter(f=>!refs.has(f));
+    if(orphaned.length){console.error('❌',orphaned.length,'orphaned');orphaned.forEach(f=>console.error(' ',f));process.exit(1)}
+    console.log('✅',disk.size+'/'+disk.size,'covered');
+    "
+    ```

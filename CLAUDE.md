@@ -9,10 +9,10 @@ This file provides guidance to Claude Code when working with code in this reposi
 1. Asking which platform to test (macOS, Web, Windows, iOS, Android)
 2. Initializing a typed QA workspace (flow-based / feature-based / risk-based)
 3. Reading prior knowledge from `qa/context/` or discovering the app visually
-4. **Phase 1** — Launching the app, tracing every public happy flow step-by-step with screenshots at every action, writing `flow.md` per flow, saving state checkpoints
-5. **Phase 2** — After user provides credentials, tracing auth-gated flows and generating full test coverage: all scenarios + `TC-NNN-*.md` files with runnable automation scripts
+4. **Phase 1** — Seed crawl → build navigation graph → discover user personas → derive E2E journeys (persona + goal + path) → trace each journey end-to-end with screenshots at every action → write `flow.md` per journey → save state checkpoints
+5. **Phase 2** — After user provides credentials, tracing auth-gated journeys and generating full test coverage: all scenarios + `TC-NNN-*.md` files with runnable automation scripts
 
-Context is reset after each flow (screenshots fill context fast). A state file `qa/state-[platform].md` persists all knowledge across resets.
+Context is reset after each journey (screenshots fill context fast). A state file `qa/state.md` persists all knowledge across resets.
 
 **Platform support**:
 - macOS ✅ production — AppleScript + screencapture + Accessibility API
@@ -41,7 +41,7 @@ SKILL.md                          ← Root orchestrator
 skills/
 ├── _registry/registry.json       ← Registered platform skills
 ├── macos/SKILL.md                ← macOS Steps 4–11 (production)
-├── web/SKILL.md                  ← Web Steps W-1–W-11 (beta)
+├── web/SKILL.md                  ← Web Steps W-1–W-12 (beta)
 ├── ios/SKILL.md                  ← Stub
 ├── android/SKILL.md              ← Stub
 ├── windows/SKILL.md              ← Stub
@@ -54,26 +54,19 @@ After platform selection, the root skill handles Steps 0–3 (mode detection, wo
 
 ### Platform Sub-Skills
 
-Each platform SKILL.md is self-contained — all automation scripts are inlined, no external file dependencies. Platform skills receive context from the root skill via the workspace config and state file.
+Each platform SKILL.md is self-contained — automation code is inlined as instructions. The web skill depends on two committed utility scripts (`scripts/qa-screenshot.js` for atomic screenshot registration, `scripts/allure/generate-phase*-report.js` for Allure report generation) that contain complex reusable logic. Platform skills receive context from the root skill via the workspace config and state file.
 
 ---
 
-## Running the macOS Exploration Script
+## How Exploration Works
 
-```bash
-python3 skills/macos/explore.py --app "AppName" --output qa/knowledgebase/
-python3 skills/macos/explore.py --app "AppName" --output qa/knowledgebase/ --screenshot
-```
+Exploration scripts are **inlined in each platform's SKILL.md** — not standalone repo files. The agent writes and runs them at runtime, adapting to each app dynamically.
 
-No pip dependencies — uses stdlib only (`subprocess`, `json`, `argparse`, `plistlib`).
+### macOS
+The explore script is inlined in `skills/macos/SKILL.md` (Step 5). At runtime the agent writes it to `qa/scripts/explore.py` and runs it. No pip dependencies — uses stdlib only (`subprocess`, `json`, `argparse`, `plistlib`).
 
-## Running Web Exploration
-
-```bash
-npm install
-npx playwright install chromium
-npm run explore:web              # runs skills/web/explore.ts
-```
+### Web
+Uses **inline Playwright code blocks** in `skills/web/SKILL.md` (Steps W-2, W-3). The agent takes screenshots, reads them, and decides the next action — no separate explore script. Each step adapts to the specific app's UI.
 
 ---
 
@@ -105,12 +98,17 @@ The skill detects its mode after platform selection:
 
 **Phase 1 core loop** (Steps 4–7 in each platform skill):
 1. Read prior knowledge from `qa/context/` (if any files exist)
-2. Launch app
+2. Launch app / seed crawl all reachable pages
 3. Screenshot → **Read with Read tool** → analyze visually
-4. Navigate each section, screenshot, analyze, ask clarifying questions
-5. Trace each happy flow step-by-step with a screenshot after every action
-6. Write `flow.md` with discovery evidence table
-7. Save checkpoint to `qa/state-[platform].md` → context reset
+4. **Build navigation graph** (pages → CTAs → pages, with auth gates)
+5. **Discover personas** from auth boundaries, plan tiers, feature sections
+6. **Derive E2E journeys** (persona + goal + path through the app = one flow)
+7. Present journey inventory to user for confirmation
+8. Trace each journey end-to-end with screenshots at every action (use `capture()` for atomic registration)
+9. Write `flow.md` with 5-column discovery evidence table (Step | Page/Screen | Action | Screenshot | Observed)
+10. Save checkpoint to `qa/state.md` → context reset
+11. **Screenshot coverage gate** — every screenshot on disk must be referenced in a flow.md
+12. **Generate Phase 1 Allure report** (`npm run allure:phase1:open`) — includes Product name in all labels
 
 **Phase 2 core loop** (Steps 8–9):
 1. Read auth screenshots from Phase 1 to identify credential fields
@@ -118,6 +116,7 @@ The skill detects its mode after platform selection:
 3. Trace auth-gated flows with screenshots
 4. Generate all scenarios per flow
 5. Write `TC-NNN-*.md` per scenario
+6. **Generate Phase 2 Allure report** (`npm run allure:phase2:open`)
 
 ---
 
@@ -128,7 +127,7 @@ The skill detects its mode after platform selection:
 ```
 qa/
 ├── .qa-config.json              ← Workspace config (platform, framework, app, counts)
-├── state-[platform].md          ← Session checkpoint — one per platform
+├── state.md                     ← Session checkpoint — one global state file
 ├── planning/platforms.md
 ├── guardrails/do-and-dont.md
 ├── credentials/access.md
@@ -138,8 +137,10 @@ qa/
 │   ├── feature-specs/
 │   └── figma-screens/
 ├── knowledgebase/
-│   ├── ui-inventory.md
-│   ├── ui-inventory.json
+│   ├── ui-inventory.md          ← Page inventory from seed crawl
+│   ├── nav-graph.md             ← Navigation graph (page → CTA → page)
+│   ├── personas.md              ← Discovered user personas
+│   ├── journey-inventory.md     ← All E2E journeys with coverage tracking
 │   └── screenshots/             ← Discovery screenshots (gitignored)
 └── flows/
     └── F-NNN-[flow-slug]/
@@ -161,23 +162,15 @@ qa/
 
 ## Session State
 
-`qa/state-[platform].md` is the memory across context resets. Each file contains:
+`qa/state.md` is the memory across context resets. It contains:
 - App under test (name, path, auth method, core product, quirks)
-- Which flows are completed (with screenshot counts and key observations)
-- Which flows are pending (with priority and auth requirement)
-- Exact resume command for the next flow
+- Which E2E journeys are completed (with screenshot counts and key observations)
+- Which journeys are pending (with priority and auth requirement)
+- Journey coverage: [N traced] / [N total] ([%])
+- Exact resume command for the next journey
 - Credentials status
 
-**State file naming**:
-| Platform | State file |
-|----------|-----------|
-| macOS | `qa/state-macos.md` |
-| Web | `qa/state-web.md` |
-| Windows | `qa/state-windows.md` |
-| iOS | `qa/state-ios.md` |
-| Android | `qa/state-android.md` |
-
-One file per OS. Testing a different app on the same platform overwrites the state file.
+**State file**: `qa/state.md` — one global state file shared across all platforms. Testing a different app overwrites it with the new app's context.
 
 ---
 
@@ -187,16 +180,20 @@ One file per OS. Testing a different app on the same platform overwrites the sta
 |------|---------|
 | `SKILL.md` | Root orchestrator — platform selection, workspace init, delegation |
 | `skills/macos/SKILL.md` | Complete macOS runbook (Steps 4–11) — self-contained |
-| `skills/web/SKILL.md` | Complete web runbook (Steps W-1–W-11) — self-contained |
+| `skills/web/SKILL.md` | Complete web runbook (Steps W-1–W-12) — self-contained with inline Playwright config and spec extraction |
 | `skills/_registry/registry.json` | Platform skill registry (read by SKILL.md Step 0) |
-| `skills/macos/explore.py` | AppleScript UI enumeration + screenshot — no pip deps |
-| `skills/macos/templates/flow.md` | Template for every `flow.md` |
-| `skills/macos/templates/scenarios.md` | Template for every `scenarios.md` |
-| `skills/macos/templates/test-case.md` | Template for every `TC-NNN-*.md` |
+| `skills/macos/SKILL.md` (Step 5, inlined) | AppleScript UI enumeration — written to `qa/scripts/explore.py` at runtime |
+| `skills/macos/templates/flow.md` | Template for every `flow.md` (macOS) |
+| `skills/web/templates/flow.md` | Template for every `flow.md` (web) — includes 5-col evidence table for E2E journeys |
+| `skills/web/templates/scenarios.md` | Template for every `scenarios.md` |
+| `skills/web/templates/test-case.md` | Template for every `TC-NNN-*.md` |
 | `skills/macos/references/macos-automation.md` | AppleScript patterns, window/menu enumeration |
 | `skills/macos/references/test-patterns.md` | Scenario patterns by UI element type and app category |
 | `skills/web/references/playwright-patterns.md` | Playwright patterns for web TCs |
 | `skills/web/references/selector-strategies.md` | Selector strategies for SPAs |
+| `scripts/qa-screenshot.js` | Atomic screenshot + flow.md registration — prevents orphaned screenshots. Used as CLI and module. |
+| `scripts/allure/generate-phase1-report.js` | Phase 1 Allure report — reads flow.md + screenshots → allure-results. Includes screenshot coverage gate and Product naming. |
+| `scripts/allure/generate-phase2-report.js` | Phase 2 Allure report — reads TC files → allure-results (standalone or enrich mode) |
 | `.env.example` | Template for `.env.qa` — all supported env vars |
 
 ---
@@ -204,32 +201,39 @@ One file per OS. Testing a different app on the same platform overwrites the sta
 ## Manually Testing Changes
 
 ### macOS skill
-
+Run the QA skill on any installed macOS app. The explore script is generated at runtime:
 ```bash
-python3 skills/macos/explore.py --app "TextEdit" --output /tmp/qa-test --screenshot
-cat /tmp/qa-test/ui-inventory.md
-ls /tmp/qa-test/screenshots/
+# In Claude Code, say: "Run QA on TextEdit"
+# The skill writes qa/scripts/explore.py and runs it automatically
+# After discovery, check output:
+cat qa/knowledgebase/ui-inventory.md
+ls qa/knowledgebase/screenshots/
 ```
 
 ### Web skill
-
 ```bash
 cp .env.example .env.qa
 # Set QA_APP_URL in .env.qa
-npm run explore:web
+# In Claude Code, say: "Run QA on [your web app]"
+# The skill runs inline Playwright to explore the app dynamically
 ```
 
 ### Full skill verification checklist
 
 - `qa/.qa-config.json` exists with correct `framework` and `platform` values
-- `qa/state-[platform].md` exists after first checkpoint
-- `qa/knowledgebase/screenshots/` contains at least 1 screenshot per flow
-- `qa/flows/` (or `features/` or `test-cases/`) has at least 4 flow directories
+- `qa/state.md` exists after first checkpoint with journey coverage %
+- `qa/knowledgebase/screenshots/` contains at least 1 screenshot per journey step
+- `qa/knowledgebase/nav-graph.md` exists with navigation graph
+- `qa/knowledgebase/personas.md` exists with discovered personas
+- `qa/knowledgebase/journey-inventory.md` exists with journey count and coverage tracking
+- `qa/flows/` (or `features/` or `test-cases/`) has flow directories — one per E2E journey
 - Each flow directory has `flow.md`, `scenarios.md`, and `test-cases/` subdirectory
-- `flow.md` includes a Discovery Evidence table with screenshot references
+- `flow.md` includes a Discovery Evidence table with screenshot references (5-col for E2E journeys)
+- **Screenshot coverage gate passes** — every .png on disk is referenced in a flow.md (enforced by Allure generator)
 - Each `scenarios.md` has at least 5 scenarios covering multiple categories
 - Each `TC-NNN-*.md` has a runnable automation block (AppleScript or Playwright TypeScript)
 - No credentials appear in any tracked file
+- `allure-report/index.html` generated after each phase — Product name visible in report labels
 
 ---
 

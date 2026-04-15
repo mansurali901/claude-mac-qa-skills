@@ -6,7 +6,12 @@
       "Bash(grep \"P1\" qa/flows/*/scenarios.md)",
       "Bash(wc -l grep \"P2\" qa/flows/*/scenarios.md)",
       "Bash(wc -l grep \"P3\" qa/flows/*/scenarios.md)",
-      "Bash(grep -h \"^\\\\| \\\\*\\\\*Priority\\\\*\\\\*\" qa/flows/*/scenarios.md)"
+      "Bash(grep -h \"^\\\\| \\\\*\\\\*Priority\\\\*\\\\*\" qa/flows/*/scenarios.md)",
+      "Bash(mkdir:*)",
+      "Bash(mkdir -p qa/journeys/seed-crawl)",
+      "Bash(node -e \"const { findFlowDir } = require\\('./scripts/qa-screenshot'\\); console.log\\('seed-crawl:', findFlowDir\\('seed-crawl'\\)\\);\")",
+      "Bash(rmdir qa/journeys/seed-crawl)",
+      "Bash(rmdir qa/journeys)"
     ]
   }
 }

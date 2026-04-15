@@ -39,13 +39,13 @@ The selected platform determines: state file name, workspace mode detection, wel
 Immediately after platform selection, check if a saved session exists for that platform:
 
 ```bash
-STATE_FILE="qa/state-[selected-platform].md"  # e.g. qa/state-web.md
+STATE_FILE="qa/state.md"
 [ -f "$STATE_FILE" ] && echo "EXISTS" || echo "NONE"
 ```
 
 #### If state file EXISTS — read it and ask the user
 
-Read `qa/state-[platform].md`. Extract:
+Read `qa/state.md`. Extract:
 - App name (from the App table)
 - Phase (e.g. `EXPLORATION_COMPLETE`, `PHASE_2_IN_PROGRESS`)
 - Next action (from Resume Instructions → "Next action" line)
@@ -106,7 +106,7 @@ fi
 
 **After every completed flow, reset the context window. This is not optional.**
 
-Reading screenshots, flow.md files, and accumulated tool output fills the context fast. By flow 3-4 the context is full and the session crashes mid-run. The fix: treat each flow as an isolated unit — complete it, save everything to `qa/state-[platform].md`, start fresh.
+Reading screenshots, flow.md files, and accumulated tool output fills the context fast. By flow 3-4 the context is full and the session crashes mid-run. The fix: treat each flow as an isolated unit — complete it, save everything to `qa/state.md`, start fresh.
 
 ### STOP / PAUSE / SAVE STATE — Immediate Handler
 
@@ -114,10 +114,34 @@ Reading screenshots, flow.md files, and accumulated tool output fills the contex
 
 Do NOT just acknowledge. The FIRST and ONLY action is to write the checkpoint. No other response until the file is written.
 
-1. **Immediately write `qa/state-[platform].md`** using the checkpoint template below — capture everything known at this exact moment: completed flows, pending flows, what was discovered, what was NOT yet written to files (note it as in-progress)
-2. **Then tell the user**:
+1. **Immediately write `qa/state.md`** using the checkpoint template below — capture everything known at this exact moment: completed flows, pending flows, what was discovered, what was NOT yet written to files (note it as in-progress)
+2. **Generate the Allure report** for whatever phase is current:
 
-> "✅ Checkpoint saved to `qa/state-[platform].md`
+```bash
+# If in Phase 1 (discovery) or mixed progress:
+node scripts/allure/generate-phase1-report.js && npx allure generate allure-results -o allure-report --clean
+
+# If in Phase 2 (TCs written) — web platform:
+node scripts/allure/generate-phase2-report.js && npx allure generate allure-results -o allure-report --clean
+
+# If in Phase 2 — macOS/other platform:
+node scripts/allure/generate-phase2-report.js --mode standalone && npx allure generate allure-results -o allure-report --clean
+```
+
+**How to pick the right command**: check `qa/.qa-config.json` → if `test_cases_count > 0`, run the Phase 2 script. Otherwise run the Phase 1 script. Use this logic:
+
+```bash
+TC_COUNT=$(node -e "const c=require('./qa/.qa-config.json'); console.log(c.test_cases_count||0)")
+if [ "$TC_COUNT" -gt 0 ]; then
+  node scripts/allure/generate-phase2-report.js && npx allure generate allure-results -o allure-report --clean
+else
+  node scripts/allure/generate-phase1-report.js && npx allure generate allure-results -o allure-report --clean
+fi
+```
+
+3. **Then tell the user**:
+
+> "✅ Checkpoint saved to `qa/state.md`
 >
 > | Saved | Value |
 > |-------|-------|
@@ -126,9 +150,12 @@ Do NOT just acknowledge. The FIRST and ONLY action is to write the checkpoint. N
 > | Screenshots taken | [N] |
 > | TCs written | [N] |
 > | Stopped at | [exact step — e.g. 'Mid F-003 trace, step 4 of 7'] |
+> | Allure report | `allure-report/index.html` |
 >
-> **To resume**: open a new conversation and say:
-> `Read qa/state-[platform].md and continue QA for [AppName]`"
+> Type `/clear` now to reset context, then paste:
+> `Read qa/state.md and continue QA for [AppName]`
+>
+> **To view the report**: `npm run allure:open`"
 
 **If work was in-progress mid-flow** (e.g. stopped while tracing F-003 step 4): note the incomplete flow explicitly in the state file under "In Progress" so the resume picks it up from the right point — not from the beginning of that flow.
 
@@ -140,7 +167,7 @@ Reset the context window after:
 
 | Trigger | Action |
 |---------|--------|
-| User says "stop", "pause", or "save state" | → **STOP handler above — write state file immediately** |
+| User says "stop", "pause", or "save state" | → **STOP handler above — write state file + Allure report** |
 | Each flow fully traced in Phase 1 (flow.md written) | → Write checkpoint, tell user resume command |
 | Each flow's TCs fully written in Phase 2 | → Write checkpoint, tell user resume command |
 | Conversation exceeds ~15 tool calls | → Write checkpoint proactively before continuing |
@@ -149,7 +176,7 @@ Reset the context window after:
 
 After writing `flow.md` and the discovery evidence table for any flow:
 
-1. **Write checkpoint** to `qa/state-[platform].md` — record every flow completed, every flow pending, the exact next step
+1. **Write checkpoint** to `qa/state.md` — record every flow completed, every flow pending, the exact next step
 2. **Tell the user**:
 
 > "Flow **F-NNN — [Name]** complete. Saving context and resetting.
@@ -157,7 +184,7 @@ After writing `flow.md` and the discovery evidence table for any flow:
 > Context used so far: [N] flows traced, [N] screenshots read.
 >
 > **To continue**: start a new conversation and say:
-> `Read qa/state-[platform].md and continue Phase 1. Next flow: F-[NNN+1] — [name].`
+> `Read qa/state.md and continue Phase 1. Next flow: F-[NNN+1] — [name].`
 >
 > Or say **'continue'** here and I'll carry on — but a fresh context is recommended after every 2-3 flows."
 
@@ -165,41 +192,31 @@ After writing `flow.md` and the discovery evidence table for any flow:
 
 ### The State File Is the Memory
 
-Every reset works because `qa/state-[platform].md` contains everything needed to resume:
+Every reset works because `qa/state.md` contains everything needed to resume:
 - Which flows are done (with screenshot paths and key observations)
 - Which flows are pending (with names, priority, auth requirement)
 - The exact resume command for the next flow
 - App quirks discovered so far
 - Credentials status
 
-A fresh context reading `qa/state-[platform].md` has full situational awareness. No information is lost.
+A fresh context reading `qa/state.md` has full situational awareness. No information is lost.
 
 ### Phase 2 Context Resets
 
 Same rule applies during TC generation:
 - Write all TCs for one flow → checkpoint → reset
-- Resume: `"Read qa/state-[platform].md and write all TCs for F-[NNN] — [name]."`
+- Resume: `"Read qa/state.md and write all TCs for F-[NNN] — [name]."`
 - Never try to write TCs for multiple flows in one context
 
 ---
 
 ## Checkpoint Protocol
 
-**Session checkpoints are automatic — each OS gets its own state file, one per platform.**
+**Session checkpoints are automatic — one global state file for the entire workspace.**
 
-### One State File Per OS
+### Global State File
 
-| OS being tested | State file |
-|----------------|-----------|
-| Web (any web app) | `qa/state-web.md` |
-| macOS (any macOS app) | `qa/state-macos.md` |
-| Windows (any Windows app) | `qa/state-windows.md` |
-| iOS (any iOS app) | `qa/state-ios.md` |
-| Android (any Android app) | `qa/state-android.md` |
-
-**The state file belongs to the OS, not the app.** If you test paio.bot on web, the state goes into `qa/state-web.md`. If you then test Slack on macOS, the state goes into `qa/state-macos.md`. The two files never interfere. If you later test a different web app, `qa/state-web.md` gets overwritten with the new app's context.
-
-Always derive the filename from `.qa-config.json` → `platform` field (lowercase, no spaces).
+All platforms share a single state file: `qa/state.md`. Testing a different app overwrites it with the new app's context.
 
 ### When to Write a Checkpoint
 
@@ -215,7 +232,7 @@ Always derive the filename from `.qa-config.json` → `platform` field (lowercas
 
 ### How to Write the Checkpoint
 
-Read `platform` from `.qa-config.json`. Write (or overwrite) `qa/state-[platform].md` using this template. Fill every section with real values — no placeholders left blank.
+Write (or overwrite) `qa/state.md` using this template. Fill every section with real values — no placeholders left blank.
 
 ````markdown
 # QA Session State — [OS/Platform]
@@ -223,7 +240,7 @@ Read `platform` from `.qa-config.json`. Write (or overwrite) `qa/state-[platform
 **App under test**: [AppName]
 
 > Resume: open a new conversation in this repo and say:
-> **"Read qa/state-[platform].md and continue QA for [AppName]"**
+> **"Read qa/state.md and continue QA for [AppName]"**
 
 ## Snapshot — [YYYY-MM-DD HH:MM]
 
@@ -283,7 +300,7 @@ QA_TEST_PASSWORD=
 
 **Copy-paste resume command**:
 ```
-Read qa/state-[platform].md and continue QA for [AppName]. Next: [exact next action].
+Read qa/state.md and continue QA for [AppName]. Next: [exact next action].
 ```
 
 > This command gives a fresh context full situational awareness. The state file is the memory.
@@ -291,9 +308,21 @@ Read qa/state-[platform].md and continue QA for [AppName]. Next: [exact next act
 
 ### After Writing the Checkpoint
 
+Generate the Allure report (same logic as the STOP handler — Phase 1 or Phase 2 based on `test_cases_count`):
+
+```bash
+TC_COUNT=$(node -e "const c=require('./qa/.qa-config.json'); console.log(c.test_cases_count||0)")
+if [ "$TC_COUNT" -gt 0 ]; then
+  node scripts/allure/generate-phase2-report.js && npx allure generate allure-results -o allure-report --clean
+else
+  node scripts/allure/generate-phase1-report.js && npx allure generate allure-results -o allure-report --clean
+fi
+```
+
 Tell the user:
-> "✅ Checkpoint saved to `qa/state-[platform].md` — [N] flows, [N] scenarios, [N] TCs written, [N] pending.
-> To resume: start a new conversation and say **'Read qa/state-[platform].md and continue QA for [AppName]'**"
+> "✅ Checkpoint saved to `qa/state.md` — [N] flows, [N] scenarios, [N] TCs written, [N] pending.
+> Allure report generated at `allure-report/index.html` — run `npm run allure:open` to view.
+> To resume: start a new conversation and say **'Read qa/state.md and continue QA for [AppName]'**"
 
 ---
 
@@ -383,11 +412,11 @@ This entire directory is gitignored and recreated fresh each session.
 | `flows/` | One directory per user flow: flow.md + scenarios.md + test cases |
 | `evidence/` | Screenshots and artifacts captured during test runs |
 | `runs/` | Test run summaries and Playwright JSON results |
-| `state-[platform].md` | Session checkpoint — resume from here in a new conversation |
+| `state.md` | Session checkpoint — resume from here in a new conversation |
 
 ## Resume a session
 Open a new conversation in this repo and say:
-**"Read qa/state-[platform].md and continue QA for [AppName]"**
+**"Read qa/state.md and continue QA for [AppName]"**
 ```
 
 **`qa/context/README.md`**
@@ -572,7 +601,7 @@ Tell the user:
 > "✅ QA workspace initialized with **[chosen framework]** organization on **[selected platform]**.
 > Next — which application do you want to test?"
 
-→ **Write checkpoint** to `qa/state-[platform].md` (see Checkpoint Protocol). Record: platform, framework, directories created.
+→ **Write checkpoint** to `qa/state.md` (see Checkpoint Protocol). Record: platform, framework, directories created.
 
 Proceed to **Step 2**.
 
@@ -588,7 +617,7 @@ Ask, tailoring to the selected platform:
 
 Wait for the answer. Store the app name / URL.
 
-→ **Write checkpoint** to `qa/state-[platform].md`. Record: platform, framework, app name provided.
+→ **Write checkpoint** to `qa/state.md`. Record: platform, framework, app name provided.
 
 Proceed to **Step 3**.
 
@@ -616,33 +645,29 @@ Extract: named flows, features, user journeys, navigation paths, edge cases, aut
 
 ### 3.2 Ask How to Provide Context (only if `qa/context/` is empty)
 
-**DO NOT paraphrase. DO NOT rewrite. Output EXACTLY the following text, replacing only [AppName] with the actual app name:**
+> ⛔ **HARD GATE — Output the EXACT text below. Do NOT paraphrase. Do NOT rewrite. Do NOT summarize. Do NOT add your own questions. Replace only `[AppName]` with the actual app name. Copy everything else character-for-character.**
 
----
+> "Step 3 — Prior Knowledge
+>
+> `qa/context/` is ready. Before I start exploring **[AppName]**, do you have any background I should read first?
+>
+> **Option 1 — Drop files into `qa/context/`**
+> Place any of the following there, then say "ready":
+> - Figma screen exports (PNG or JPG)
+> - PRD / product spec (.md or .txt)
+> - GitHub README, issue list, or notes
+> - Any markdown describing flows, features, or edge cases
+> - Screenshots of the installed app
+>
+> **Option 2 — Tell me in the chat**
+> Describe what you know — what the app does, key flows, things to test or skip, known edge cases.
+>
+> **Option 3 — Discover it yourself**
+> I'll explore **[AppName]** visually from scratch — screenshot every screen and map every flow.
+>
+> Which would you like? (1 / 2 / 3)"
 
-Step 3 — Prior Knowledge
-
-`qa/context/` is ready. Before I start exploring **[AppName]**, do you have any background I should read first?
-
-**Option 1 — Drop files into `qa/context/`**
-Place any of the following there, then say "ready":
-- Figma screen exports (PNG or JPG)
-- PRD / product spec (.md or .txt)
-- GitHub README, issue list, or notes
-- Any markdown describing flows, features, or edge cases
-- Screenshots of the installed app
-
-**Option 2 — Tell me in the chat**
-Describe what you know — what the app does, key flows, things to test or skip, known edge cases.
-
-**Option 3 — Discover it yourself**
-I'll explore **[AppName]** visually from scratch — screenshot every screen and map every flow.
-
-Which would you like? (1 / 2 / 3)
-
----
-
-**Wait for the user's answer. Do not proceed until they reply.**
+**STOP. Output nothing else. Do not continue to Step 3.3 until the user replies.**
 
 ---
 

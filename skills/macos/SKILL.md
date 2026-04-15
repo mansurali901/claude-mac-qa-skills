@@ -47,7 +47,7 @@ ls qa/context/ 2>/dev/null
 
 **This handler is active at every step. Whenever the user says "stop", "pause", "save state", or any equivalent — write the state file immediately. Do not just acknowledge.**
 
-1. **Write `qa/state-macos.md` now** — capture everything known at this exact moment:
+1. **Write `qa/state.md` now** — capture everything known at this exact moment:
    - Completed flows (with screenshot counts and key observations)
    - In-progress flow (if mid-trace: note the `flow.md` already exists with observations up to the stopped step — resume will continue appending from here)
    - Pending flows (names, priority, auth requirement)
@@ -57,7 +57,7 @@ ls qa/context/ 2>/dev/null
 
 2. **Tell the user**:
 
-> "✅ Checkpoint saved to `qa/state-macos.md`
+> "✅ Checkpoint saved to `qa/state.md`
 >
 > | Saved | Value |
 > |-------|-------|
@@ -67,8 +67,8 @@ ls qa/context/ 2>/dev/null
 > | Screenshots taken | [N] |
 > | TCs written | [N] |
 >
-> **To resume**: open a new conversation and say:
-> `Read qa/state-macos.md and continue QA for [AppName]`"
+> Type `/clear` now to reset context, then paste:
+> `Read qa/state.md and continue QA for [AppName]`"
 
 ---
 
@@ -120,7 +120,7 @@ Write the following planning files using the templates at the end of this file:
 - `qa/credentials/access.md`
 - `qa/scope/contract.md`
 
-→ **Write checkpoint** to `qa/state-macos.md`. Record: app name, bundle ID, version, macOS version, architecture.
+→ **Write checkpoint** to `qa/state.md`. Record: app name, bundle ID, version, macOS version, architecture.
 
 ---
 
@@ -622,7 +622,7 @@ If gated (invite only, CAPTCHA, paid plan, no signup form) → tell user and fal
 
 **Option 4 — Skip:**
 - Write to `flow.md` discovery evidence table: `⛔ Access required — [exact credential type from screenshot] — deferred to Phase 2`
-- Note in `qa/state-macos.md` under pending flows: flow name + exact credential type needed
+- Note in `qa/state.md` under pending flows: flow name + exact credential type needed
 - Continue to the next public flow
 
 ### 6.6 Compile Section Inventory
@@ -697,7 +697,7 @@ Write `qa/flows/F-NNN-[slug]/README.md`:
 
 Use the **Flow Template** at the end of this file. Write to `qa/flows/F-NNN-[slug]/flow.md`.
 
-→ **Write checkpoint** to `qa/state-macos.md` after each flow's `flow.md` is written. Then reset context.
+→ **Write checkpoint** to `qa/state.md` after each flow's `flow.md` is written. Then tell the user: "Type `/clear` now to reset context, then paste: `Read qa/state.md and continue QA for [AppName]`"
 
 ---
 
@@ -705,11 +705,32 @@ Use the **Flow Template** at the end of this file. Write to `qa/flows/F-NNN-[slu
 
 **After all flows have `flow.md` with discovery evidence — STOP. Do not generate scenarios or test cases yet.**
 
-→ **Write checkpoint** to `qa/state-macos.md`. Record:
+→ **Write checkpoint** to `qa/state.md`. Record:
 - All flows discovered (every F-NNN slug)
 - Happy flows traced (with screenshot counts)
 - Auth-gated flows (list which ones need credentials)
 - Phase: `EXPLORATION_COMPLETE — awaiting credentials`
+
+### Phase 1 Allure Report
+
+After the checkpoint is written, generate the Allure discovery report:
+
+```bash
+# Generate allure-results from discovery data (flow.md + screenshots)
+node scripts/allure/generate-phase1-report.js
+
+# Build the HTML report
+npx allure generate allure-results -o allure-report --clean
+
+# Open in browser
+npx allure open allure-report
+```
+
+Or use the npm script shortcut:
+
+```bash
+npm run allure:phase1:open
+```
 
 Tell the user:
 
@@ -721,6 +742,10 @@ Tell the user:
 > | F-002 [name] | ✅ [N] steps | Yes | [N] public |
 >
 > **[N] flows** · **[N] screenshots** · **[N] flows** need credentials for Phase 2
+>
+> **Phase 1 Allure Report** generated at `allure-report/index.html`
+> The report includes discovery evidence, screenshots, and flow summaries.
+> Run `npm run allure:open` to view it.
 >
 > Say **'generate full coverage'** when ready. I'll read the auth screenshots first to identify exactly what credentials the UI requires, then ask how to provide them."
 
@@ -849,7 +874,7 @@ Read `skills/macos/references/test-patterns.md` for patterns by UI element type.
 
 Use the **Scenarios Template** at the end of this file. Write to `qa/flows/F-NNN-[slug]/scenarios.md`.
 
-→ **Write checkpoint** to `qa/state-macos.md` after all flows have `scenarios.md`.
+→ **Write checkpoint** to `qa/state.md` after all flows have `scenarios.md`.
 
 ---
 
@@ -994,7 +1019,7 @@ if __name__ == "__main__":
 
 ### 9.5 Checkpoint After Every 5 TCs
 
-→ **Write checkpoint** to `qa/state-macos.md`. Record every TC written by ID and every TC pending by ID and flow. Reset context after the checkpoint.
+→ **Write checkpoint** to `qa/state.md`. Record every TC written by ID and every TC pending by ID and flow. Reset context after the checkpoint.
 
 ---
 
@@ -1119,7 +1144,41 @@ if __name__ == "__main__":
     main()
 ```
 
-### 10.4 Print Summary
+### 10.4 Phase 2 Allure Report
+
+After all TCs are written and the HTML report is generated, produce the Phase 2 Allure report:
+
+```bash
+# Generate allure-results from TC files (standalone mode for macOS)
+node scripts/allure/generate-phase2-report.js --mode standalone
+
+# Build the HTML report
+npx allure generate allure-results -o allure-report --clean
+
+# Open in browser
+npx allure open allure-report
+```
+
+Or use the npm script shortcut:
+
+```bash
+npm run allure:phase2:open
+```
+
+Tell the user:
+
+> "**Phase 2 Allure Report** generated at `allure-report/index.html`
+>
+> The report includes:
+> - Coverage overview (TC files, scenarios per flow, category breakdown)
+> - One entry per scenario with step-by-step detail
+> - Evidence screenshots attached where available
+> - Priority/severity labels and flow groupings
+> - Environment info and test metadata
+>
+> Run `npm run allure:open` to view it again."
+
+### 10.5 Print Summary
 
 ```
 ╔═══════════════════════════════════════════════════════════════╗
@@ -1137,10 +1196,11 @@ if __name__ == "__main__":
   Scenarios:       [N total] ([N] P1, [N] P2, [N] P3)
   Test Cases:      [N files]
   HTML Report:     qa/report.html
+  Allure Report:   allure-report/index.html
 ╚═══════════════════════════════════════════════════════════════╝
 ```
 
-→ **Write final checkpoint** to `qa/state-macos.md`.
+→ **Write final checkpoint** to `qa/state.md`.
 
 ---
 
@@ -1182,7 +1242,7 @@ Confirm, then restart from Step 5.
 ### Option 5: Phase 2
 
 1. Read Phase 1 auth screenshots → identify required fields
-2. Read `qa/state-macos.md` for all flows and auth status
+2. Read `qa/state.md` for all flows and auth status
 3. Proceed to Step 8.0 (credential acquisition)
 4. Then Step 8.1–8.2 (scenarios)
 5. Then Step 9 (TCs)
@@ -1525,6 +1585,6 @@ osascript -e 'tell application "[AppName]" to quit' 2>/dev/null
 - **AppleScript delays are mandatory** — `delay 1` after clicks, `delay 3` after launch/quit
 - **Menu bar apps** — if no window appears after launch, check `menu bar 2` (system status bar)
 - **Credentials** — `.env.qa` is always gitignored; never write real values to tracked files
-- **Context reset** — after every flow traced, write checkpoint to `qa/state-macos.md` and reset context
+- **Context reset** — after every flow traced, write checkpoint to `qa/state.md` then tell user to type `/clear` and paste the resume command
 - **Read `skills/macos/references/macos-automation.md`** for AppleScript patterns not covered here
 - **Read `skills/macos/references/test-patterns.md`** for scenario patterns by UI element type

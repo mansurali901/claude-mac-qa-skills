@@ -44,7 +44,7 @@ Claude Code already provides every tool this system needs — `Bash`, `Read` (wi
 │  MEMORY — File System (qa/)                                   │
 │                                                              │
 │  .qa-config.json      ← workspace state & counts             │
-│  state-[platform].md  ← session checkpoint per platform      │
+│  state.md             ← session checkpoint (global)           │
 │  context/             ← prior knowledge placed by user       │
 │  knowledgebase/       ← ui-inventory.md/json + screenshots   │
 │  flows/F-NNN-*/       ← flow.md · scenarios.md · TC-NNN-*.md │
@@ -55,7 +55,7 @@ Claude Code already provides every tool this system needs — `Bash`, `Read` (wi
 ┌───────────────────────────▼──────────────────────────────────┐
 │  HANDS — Platform Scripts                                     │
 │                                                              │
-│  skills/macos/explore.py   ← AppleScript UI enumeration      │
+│  AppleScript (inline)      ← macOS UI enumeration (written to qa/scripts/ at runtime) │
 │  osascript                 ← UI interaction + verification   │
 │  screencapture             ← evidence capture                │
 │  Playwright (inline)       ← web exploration + interaction   │
@@ -76,7 +76,7 @@ Step 0.2  Mode detection → INIT / CONFIGURED_NO_FLOWS / EXPLORATION_COMPLETE /
 Steps 1–3 Workspace init → framework selection → scaffold qa/ → app selection → prior knowledge
 Steps 4–7 Launch app → screenshot every section → trace every public happy flow
           → screenshot at EVERY action → write flow.md with discovery evidence table
-          → save checkpoint to qa/state-[platform].md → context reset
+          → save checkpoint to qa/state.md → context reset
 
           ↓ Phase 1 Complete Gate ↓
           All public flows traced. Tell user which flows need credentials.
@@ -159,7 +159,7 @@ Web skill additionally has `references/exploration-toolkit.md` — every Playwri
 ```
 qa/
 ├── .qa-config.json              ← workspace config (platform, framework, app, counts)
-├── state-[platform].md          ← session checkpoint — one file per OS
+├── state.md                     ← session checkpoint — one global state file
 ├── context/                     ← user places prior knowledge here before init
 │   ├── feature-specs/           ← PRDs, spec markdown files
 │   └── figma-screens/           ← exported Figma PNGs for visual analysis
@@ -205,9 +205,9 @@ Risk-based: `qa/flows/` → `qa/test-cases/P1-critical/`, `P2-high/`, etc.
 }
 ```
 
-### State file — `qa/state-[platform].md`
+### State file — `qa/state.md`
 
-One file per OS. The session checkpoint. Contains:
+One global state file. The session checkpoint. Contains:
 - App under test (name, path, auth method, quirks)
 - Completed flows (screenshot count, key observations)
 - Pending flows (priority, auth requirement)
@@ -216,13 +216,9 @@ One file per OS. The session checkpoint. Contains:
 
 A fresh context reading this file has full situational awareness. No information is lost across resets.
 
-| OS being tested | State file |
-|----------------|-----------|
-| macOS | `qa/state-macos.md` |
-| Web | `qa/state-web.md` |
-| Windows | `qa/state-windows.md` |
-| iOS | `qa/state-ios.md` |
-| Android | `qa/state-android.md` |
+| State file | Purpose |
+|-----------|---------|
+| `qa/state.md` | Session checkpoint for any platform — one global file |
 
 ---
 
@@ -263,7 +259,7 @@ Screenshots fill context fast — 3–4 flows with screenshots saturates a sessi
 
 ### Reset protocol
 
-1. Write checkpoint to `qa/state-[platform].md`
+1. Write checkpoint to `qa/state.md`
 2. Tell user the resume command
 3. If user says "continue" — proceed but reset at next flow regardless
 
@@ -400,7 +396,7 @@ claude -p "Run Phase 1 discovery for Figma. Follow SKILL.md steps 0–7 only. \
   Take screenshots, trace every flow, write flow.md files. Do not generate TCs."
 
 # Resume from checkpoint
-claude -p "Read qa/state-macos.md and continue QA for Figma. \
+claude -p "Read qa/state.md and continue QA for Figma. \
   Next: trace F-004 — Account Settings."
 ```
 

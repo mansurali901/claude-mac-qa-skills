@@ -9,10 +9,14 @@
   "scripts": {
     "build": "tsc --project tsconfig.json",
     "build:watch": "tsc --project tsconfig.json --watch",
-    "explore:web": "ts-node skills/web/explore.ts",
-    "report": "python3 skills/macos/generate-report.py",
-    "qa": "bash skills/macos/run-qa.sh",
-    "qa:parallel": "bash skills/macos/run-parallel.sh",
+    "explore:macos": "python3 qa/scripts/explore.py --output qa/knowledgebase --screenshot",
+    "qa:screenshot": "node scripts/qa-screenshot.js",
+    "allure:phase1": "node scripts/allure/generate-phase1-report.js && npx allure generate allure-results -o allure-report --clean",
+    "allure:phase1:open": "node scripts/allure/generate-phase1-report.js && npx allure generate allure-results -o allure-report --clean && npx allure open allure-report",
+    "allure:phase2": "node scripts/allure/generate-phase2-report.js && npx allure generate allure-results -o allure-report --clean",
+    "allure:phase2:open": "node scripts/allure/generate-phase2-report.js && npx allure generate allure-results -o allure-report --clean && npx allure open allure-report",
+    "allure:open": "npx allure open allure-report",
+    "allure:serve": "npx allure serve allure-results",
     "lint": "eslint 'skills/web/**/*.ts'",
     "format": "prettier --write '**/*.ts' '**/*.json'",
     "test": "jest --testPathPattern='tests/'",
@@ -35,6 +39,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "allure-commandline": "^2.32.0",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0",
     "@types/pixelmatch": "^5.2.6",

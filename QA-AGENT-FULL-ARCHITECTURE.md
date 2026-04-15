@@ -330,9 +330,9 @@ Every skill module shares the same internal structure, regardless of platform. C
 |-----------|---------|
 | **`SKILL.md`** | Natural-language workflow specification. Claude Code reads this to understand what the skill can do, how to invoke it, and what constraints apply. |
 | **`skill-manifest.json`** | Machine-readable skill descriptor: id, version, platform, capabilities[], dependencies[], entrypoint, schema. |
-| **`explore.py`** | Platform-specific UI discovery script. Enumerates all interactive elements and outputs `ui-inventory.json`. |
-| **`interact.py`** | Platform-specific interaction driver. Executes individual test actions: click, type, swipe, scroll, assert. |
-| **`screenshot.py`** | Captures visual evidence at any stage. Outputs to `qa/evidence/` with structured naming. |
+| **Explore script (inlined in SKILL.md)** | Platform-specific UI discovery — inlined in each platform's SKILL.md, written to `qa/scripts/` at runtime. Enumerates all interactive elements and outputs `ui-inventory.json`. |
+| **Interaction scripts (inlined in SKILL.md)** | Platform-specific interaction — inlined as code blocks in SKILL.md. Agent runs them dynamically, adapting to each app's UI. |
+| **`scripts/qa-screenshot.js`** | Atomic screenshot + flow.md registration. Prevents orphaned screenshots by design. |
 | **`templates/`** | `flow.md`, `scenarios.md`, and test-case templates pre-populated for the platform's conventions. |
 | **`references/`** | Deep automation references: element patterns, known quirks, platform-specific AppleScript / ADB / WinAPI recipes. |
 
@@ -345,57 +345,44 @@ skills/
 │   └── health.json                 ← Last health check per skill
 │
 ├── macos/                          ← PRODUCTION ✅
-│   ├── SKILL.md                    ← Workflow specification (Claude Code reads this)
-│   ├── skill-manifest.json         ← Machine-readable capability descriptor
-│   ├── explore.py                  ← AppleScript UI discovery
-│   ├── interact.py                 ← AppleScript interaction driver
-│   ├── screenshot.py               ← screencapture wrapper
+│   ├── SKILL.md                    ← Workflow + inlined explore/interact scripts
 │   ├── templates/
 │   │   ├── flow.md
 │   │   ├── scenarios.md
 │   │   └── test-case.md
 │   └── references/
 │       ├── macos-automation.md     ← AppleScript patterns, window discovery, screenshots
-│       └── test-patterns-native.md ← Scenario patterns by app type and element type
+│       └── test-patterns.md        ← Scenario patterns by app type and element type
 │
-├── web/                            ← PHASE 2 🔜
-│   ├── SKILL.md
-│   ├── skill-manifest.json
-│   ├── playwright.config.ts
-│   ├── explore.ts                  ← DOM + accessibility tree enumeration
-│   ├── interact.ts                 ← Playwright action driver
-│   ├── visual-diff.ts              ← Pixelmatch-based visual regression
+├── web/                            ← BETA ✅
+│   ├── SKILL.md                    ← Workflow + inline Playwright exploration
+│   ├── templates/
+│   │   ├── flow.md
+│   │   ├── scenarios.md
+│   │   ├── test-case.md
+│   │   └── playwright.config.ts    ← Copied to qa/ at runtime
 │   └── references/
 │       ├── playwright-patterns.md
-│       └── selector-strategies.md
+│       ├── selector-strategies.md
+│       └── exploration-toolkit.md
 │
-├── windows/                        ← PHASE 2 🔜
+├── windows/                        ← STUB 🔜
 │   ├── SKILL.md
-│   ├── skill-manifest.json
-│   ├── explore.py                  ← WinAppDriver + UIA3 discovery
-│   ├── interact.py
 │   └── references/
 │       └── winapdriver-patterns.md
 │
-├── ios/                            ← PHASE 3 🔜
+├── ios/                            ← STUB 🔜
 │   ├── SKILL.md
-│   ├── skill-manifest.json
-│   ├── explore.py                  ← xcrun simctl + XCUITest discovery
-│   ├── interact.py
 │   └── references/
 │       └── xcuitest-patterns.md
 │
-├── android/                        ← PHASE 3 🔜
+├── android/                        ← STUB 🔜
 │   ├── SKILL.md
-│   ├── skill-manifest.json
-│   ├── explore.py                  ← ADB + UIAutomator2 discovery
-│   ├── interact.py
 │   └── references/
 │       └── uiautomator-patterns.md
 │
 └── extension/                      ← PLANNED 📋
-    ├── SKILL.md
-    └── skill-manifest.json
+    └── SKILL.md
 ```
 
 ### 5.2 Skill Registration
@@ -1841,11 +1828,7 @@ skills/
 │   └── health.json             ← Last health check per skill
 │
 ├── macos/                      ← macOS native skill
-│   ├── SKILL.md
-│   ├── skill-manifest.json
-│   ├── explore.py              ← AppleScript UI discovery
-│   ├── interact.py             ← AppleScript interaction driver
-│   ├── screenshot.py           ← screencapture wrapper
+│   ├── SKILL.md                ← Workflow + inlined explore/interact scripts
 │   ├── templates/
 │   │   ├── flow.md
 │   │   ├── scenarios.md
@@ -1854,22 +1837,23 @@ skills/
 │       ├── macos-automation.md
 │       └── test-patterns.md
 │
-├── windows/                    ← Windows native skill (mirror structure)
-├── ios/                        ← iOS skill (mirror structure)
-├── android/                    ← Android skill (mirror structure)
+├── windows/                    ← Windows native skill (stub)
+├── ios/                        ← iOS skill (stub)
+├── android/                    ← Android skill (stub)
 │
 ├── web/                        ← Web/SPA skill
-│   ├── SKILL.md
-│   ├── skill-manifest.json
-│   ├── playwright.config.ts
-│   ├── explore.ts
-│   ├── interact.ts
-│   ├── visual-diff.ts
+│   ├── SKILL.md                ← Workflow + inline Playwright exploration
+│   ├── templates/
+│   │   ├── flow.md
+│   │   ├── scenarios.md
+│   │   ├── test-case.md
+│   │   └── playwright.config.ts
 │   └── references/
 │       ├── playwright-patterns.md
-│       └── selector-strategies.md
+│       ├── selector-strategies.md
+│       └── exploration-toolkit.md
 │
-└── extension/                  ← Browser extension skill
+└── extension/                  ← Browser extension skill (planned)
 ```
 
 ### 19.3 Orchestrator Directory
