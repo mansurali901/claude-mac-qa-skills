@@ -141,7 +141,7 @@ Do NOT just acknowledge. The FIRST and ONLY action is to write the checkpoint. N
 
 **If work was in-progress mid-flow** (e.g. stopped while tracing F-003 step 4): note the incomplete flow explicitly in the state file under "In Progress" so the resume picks it up from the right point — not from the beginning of that flow.
 
-**Do NOT generate the Allure report on every stop/reset.** Report generation is expensive and consumes context. Only generate reports at phase boundaries (Phase 1 complete, Phase 2 complete, all phases done) or when the user explicitly asks for a report.
+**Do NOT generate the QA report on every stop/reset.** Report generation is expensive and consumes context. Only generate reports at phase boundaries (Phase 1 complete, Phase 2 complete, all phases done) or when the user explicitly asks for a report.
 
 ---
 
@@ -155,6 +155,7 @@ Reset the context window after:
 | Each flow fully traced in Phase 1 (flow.md written) | → Append to state file, tell user resume command |
 | Each flow's TCs fully written in Phase 2 | → Append to state file, tell user resume command |
 | Conversation exceeds ~15 tool calls | → Write checkpoint proactively before continuing |
+| **Web BFS crawl interrupted** (stop/pause/context limit during BFS) | → BFS state is auto-saved to `qa/crawl-state.json` after every page. Note in `qa/state.md` Resume Instructions: *"Resume BFS crawl — read qa/crawl-state.json"*. The crawl script resumes automatically from the saved queue on next run. |
 
 ### How to Reset After a Flow
 
@@ -207,10 +208,10 @@ All platforms share a single state file: `qa/state.md`. Testing a different app 
 | After Step 1 (workspace init) | Framework, platform, directories created | Light |
 | After Step 2 (app selected) | App name, URL/path, metadata, auth type | Light |
 | **After each flow traced in Phase 1** | Flow slug, screenshot count, next flow pending | **Light — append only, no coverage checks or reports** |
-| **Phase 1 → Phase 2 boundary** | All flows, coverage check, Allure report | **Heavy — this is where deferred work runs** |
+| **Phase 1 → Phase 2 boundary** | All flows, coverage check, QA report | **Heavy — this is where deferred work runs** |
 | **After each flow's TCs written in Phase 2** | TCs written for this flow, remaining flows | **Light — append only** |
-| **Phase 2 → Phase 3 boundary** | All scenarios, Allure report | **Heavy** |
-| After final phase (finalize) | Final counts, Allure report, run commands | Heavy |
+| **Phase 2 → Phase 3 boundary** | All scenarios, QA report | **Heavy** |
+| After final phase (finalize) | Final counts, QA report, run commands | Heavy |
 | Whenever the user says "stop", "pause", or "save state" | Full snapshot of current progress | Light |
 
 ### How to Write the Checkpoint
@@ -262,6 +263,11 @@ All platforms share a single state file: `qa/state.md`. Testing a different app 
 #### F-001 ([N] remaining)
 - TC-NNN [description]
 
+### BFS State (web only)
+If BFS crawl was interrupted, `qa/crawl-state.json` contains the queue and visited set.
+The crawl resumes automatically when Step W-2 runs again.
+To force a fresh crawl, delete `qa/crawl-state.json` before running.
+
 ### Environment
 ```bash
 # Run written tests
@@ -297,7 +303,7 @@ Tell the user:
 > "✅ Checkpoint saved to `qa/state.md` — [N] flows, [N] scenarios, [N] TCs written, [N] pending.
 > To resume: start a new conversation and say **'Read qa/state.md and continue QA for [AppName]'**"
 
-**Report generation is deferred** — only generate the Allure report at phase boundaries or when the user asks. Do NOT run `node scripts/allure/generate-report.js` on every checkpoint — it wastes context that should be spent tracing flows.
+**Report generation is deferred** — only generate the report at phase boundaries or when the user asks. Do NOT run `node scripts/allure/generate-report.js` on every checkpoint — it wastes context that should be spent tracing flows.
 
 ---
 

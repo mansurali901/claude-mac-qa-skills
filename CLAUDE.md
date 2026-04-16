@@ -54,7 +54,7 @@ After platform selection, the root skill handles Steps 0–3 (mode detection, wo
 
 ### Platform Sub-Skills
 
-Each platform SKILL.md is self-contained — automation code is inlined as instructions. The web skill depends on two committed utility scripts (`scripts/qa-screenshot.js` for atomic screenshot registration, `scripts/allure/generate-phase*-report.js` for Allure report generation) that contain complex reusable logic. Platform skills receive context from the root skill via the workspace config and state file.
+Each platform SKILL.md is self-contained — automation code is inlined as instructions. The web skill depends on two committed utility scripts (`scripts/qa-screenshot.js` for atomic screenshot registration, `scripts/allure/generate-report.js` for standalone HTML report generation) that contain complex reusable logic. Platform skills receive context from the root skill via the workspace config and state file.
 
 ---
 
@@ -192,7 +192,7 @@ qa/
 | `skills/web/references/playwright-patterns.md` | Playwright patterns for web TCs |
 | `skills/web/references/selector-strategies.md` | Selector strategies for SPAs |
 | `scripts/qa-screenshot.js` | Atomic screenshot + flow.md registration — prevents orphaned screenshots. Used as CLI and module. |
-| `scripts/allure/generate-report.js` | Unified Allure report — reads ALL data (flows, scenarios, TCs, execution results) and produces one comprehensive report. Includes screenshot coverage gate and Product naming. Use `--open` to auto-open in browser. |
+| `scripts/allure/generate-report.js` | Standalone HTML report — reads ALL data (flows, scenarios, TCs) and produces one self-contained `qa-report.html` with embedded screenshots. No external dependencies (no Java, no allure-commandline). Works when opened directly via `file://`. Use `--open` to auto-open in browser. |
 | `.env.example` | Template for `.env.qa` — all supported env vars |
 
 ---
@@ -221,6 +221,7 @@ cp .env.example .env.qa
 
 - `qa/.qa-config.json` exists with correct `framework` and `platform` values
 - `qa/state.md` exists after first checkpoint with journey coverage %
+- `qa/crawl-state.json` exists during/after BFS (web skill) with visited URLs and queue state
 - `qa/knowledgebase/screenshots/` contains at least 1 screenshot per journey step
 - `qa/knowledgebase/nav-graph.md` exists with navigation graph
 - `qa/knowledgebase/personas.md` exists with discovered personas
@@ -232,7 +233,7 @@ cp .env.example .env.qa
 - Each `scenarios.md` has at least 5 scenarios covering multiple categories
 - Each `TC-NNN-*.md` has a runnable automation block (AppleScript or Playwright TypeScript)
 - No credentials appear in any tracked file
-- `allure-report/index.html` generated at **phase boundaries only** (Phase 1→2, Phase 2→3, final) or when user explicitly requests — NOT on every stop/checkpoint. Per-flow resets are lightweight (state file only).
+- `qa-report.html` generated at **phase boundaries only** (Phase 1→2, Phase 2→3, final) or when user explicitly requests — NOT on every stop/checkpoint. Per-flow resets are lightweight (state file only).
 
 ---
 
@@ -261,6 +262,9 @@ QA_ACCOUNT_TIER=free
 QA_SANDBOX_MODE=true
 QA_LLM_PROVIDER=claude
 QA_LLM_API_KEY=
+QA_PAGE_WAIT_MS=2000          # web: minimum wait (ms) per page before screenshot
+QA_MAX_PAGES=50               # web: BFS crawl page limit
+QA_MAX_DEPTH=5                # web: BFS crawl depth limit
 ```
 
 ---
@@ -274,9 +278,13 @@ Add to the consuming repo's `.gitignore`:
 qa/credentials/.env*
 qa/evidence/
 qa/knowledgebase/screenshots/
+qa/crawl-state.json
 qa/.auth/
+qa-report.html
 playwright-report/
+allure-results/
+allure-report/
 ```
 
 Commit `qa/` itself — it is the team's living QA documentation.
-Never commit `qa/knowledgebase/screenshots/` (large binary files), `qa/.auth/` (session tokens), or anything under `qa/credentials/` with real values.
+Never commit `qa/knowledgebase/screenshots/` (large binary files), `qa/.auth/` (session tokens), `qa/crawl-state.json` (ephemeral BFS state), or anything under `qa/credentials/` with real values.

@@ -13,8 +13,6 @@
     "qa:screenshot": "node scripts/qa-screenshot.js",
     "qa:report": "node scripts/allure/generate-report.js",
     "qa:report:open": "node scripts/allure/generate-report.js --open",
-    "allure:open": "npx allure open allure-report",
-    "allure:serve": "npx allure serve allure-results",
     "lint": "eslint 'skills/web/**/*.ts'",
     "format": "prettier --write '**/*.ts' '**/*.json'",
     "test": "jest --testPathPattern='tests/'",
