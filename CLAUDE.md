@@ -108,7 +108,7 @@ The skill detects its mode after platform selection:
 9. Write `flow.md` with 5-column discovery evidence table (Step | Page/Screen | Action | Screenshot | Observed)
 10. Save checkpoint to `qa/state.md` → context reset
 11. **Screenshot coverage gate** — every screenshot on disk must be referenced in a flow.md
-12. **Generate Phase 1 Allure report** (`npm run allure:phase1:open`) — includes Product name in all labels
+12. **Generate report** (`npm run qa:report:open`) — one unified report with Product name, opens in browser
 
 **Phase 2 core loop** (Steps 8–9):
 1. Read auth screenshots from Phase 1 to identify credential fields
@@ -116,7 +116,7 @@ The skill detects its mode after platform selection:
 3. Trace auth-gated flows with screenshots
 4. Generate all scenarios per flow
 5. Write `TC-NNN-*.md` per scenario
-6. **Generate Phase 2 Allure report** (`npm run allure:phase2:open`)
+6. **Generate report** (`npm run qa:report:open`) — same unified report, now includes all 4 phases
 
 ---
 
@@ -192,8 +192,7 @@ qa/
 | `skills/web/references/playwright-patterns.md` | Playwright patterns for web TCs |
 | `skills/web/references/selector-strategies.md` | Selector strategies for SPAs |
 | `scripts/qa-screenshot.js` | Atomic screenshot + flow.md registration — prevents orphaned screenshots. Used as CLI and module. |
-| `scripts/allure/generate-phase1-report.js` | Phase 1 Allure report — reads flow.md + screenshots → allure-results. Includes screenshot coverage gate and Product naming. |
-| `scripts/allure/generate-phase2-report.js` | Phase 2 Allure report — reads TC files → allure-results (standalone or enrich mode) |
+| `scripts/allure/generate-report.js` | Unified Allure report — reads ALL data (flows, scenarios, TCs, execution results) and produces one comprehensive report. Includes screenshot coverage gate and Product naming. Use `--open` to auto-open in browser. |
 | `.env.example` | Template for `.env.qa` — all supported env vars |
 
 ---
@@ -233,7 +232,7 @@ cp .env.example .env.qa
 - Each `scenarios.md` has at least 5 scenarios covering multiple categories
 - Each `TC-NNN-*.md` has a runnable automation block (AppleScript or Playwright TypeScript)
 - No credentials appear in any tracked file
-- `allure-report/index.html` generated after each phase — Product name visible in report labels
+- `allure-report/index.html` generated at **phase boundaries only** (Phase 1→2, Phase 2→3, final) or when user explicitly requests — NOT on every stop/checkpoint. Per-flow resets are lightweight (state file only).
 
 ---
 

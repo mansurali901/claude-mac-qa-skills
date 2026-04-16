@@ -11,7 +11,23 @@
       "Bash(mkdir -p qa/journeys/seed-crawl)",
       "Bash(node -e \"const { findFlowDir } = require\\('./scripts/qa-screenshot'\\); console.log\\('seed-crawl:', findFlowDir\\('seed-crawl'\\)\\);\")",
       "Bash(rmdir qa/journeys/seed-crawl)",
-      "Bash(rmdir qa/journeys)"
+      "Bash(rmdir qa/journeys)",
+      "Bash(grep -rn \"generate-phase[12]-report\\\\|allure:phase[12]\" SKILL.md skills/web/SKILL.md CLAUDE.md package.json)",
+      "Bash(node -c scripts/allure/generate-report.js)",
+      "Bash(node -c scripts/qa-screenshot.js)",
+      "Bash(npm --version)",
+      "Bash(node -e \"const d=require\\('fs'\\).readFileSync\\(0,'utf8'\\);const p=JSON.parse\\(d\\);console.log\\('Dependencies:',JSON.stringify\\(p.dependencies||{}\\)\\);console.log\\('DevDeps:',JSON.stringify\\(p.devDependencies||{}\\)\\)\")",
+      "Bash(npx playwright *)",
+      "Bash(node *)",
+      "Bash(npx allure *)",
+      "Bash([ -f \"$STATE_FILE\" ])",
+      "Bash(mkdir *)",
+      "Bash(mkdir -p qa/flows/F-001-homepage-and-public-pages/test-cases)",
+      "Bash(mkdir -p qa/flows/F-002-auth-signup-login/test-cases)",
+      "Bash(mkdir -p qa/flows/F-003-onboarding-wizard/test-cases)",
+      "Bash(mkdir -p qa/flows/F-004-dashboard-and-assistants/test-cases)",
+      "Bash(mkdir -p qa/flows/F-005-ai-models-and-api-keys/test-cases)",
+      "Bash(npm ls *)"
     ]
   }
 }

@@ -69,7 +69,14 @@ Present to the user:
 Wait for the user's choice:
 
 - **"1"** or **"resume"** → Read the full state file for context. Jump directly to the saved next action. Do NOT re-run workspace init, app selection, or discovery. Announce: *"Resuming [AppName] on [platform] — [next action]"* and continue.
-- **"2"** or **"new"** → Proceed to Step 0.2 as normal. The old state file will be overwritten when the new session reaches its first checkpoint.
+- **"2"** or **"new"** → **Clean up the old workspace first**, then proceed to Step 0.2 as INIT:
+
+  ```bash
+  rm -rf qa/
+  echo "Old workspace removed. Starting fresh."
+  ```
+
+  This ensures Step 0.2 correctly detects INIT mode. Do NOT skip this cleanup — without it the old `qa/` folder causes Step 0.2 to detect a stale mode instead of INIT.
 
 #### If state file does NOT exist — proceed silently
 
@@ -97,8 +104,8 @@ fi
 |--------|--------|
 | `INIT` | → **Step 1: INIT MODE** |
 | `CONFIGURED_NO_FLOWS` | → **Step 2: App Selection** (workspace ready, need discovery) |
-| `EXPLORATION_COMPLETE` | → **Phase 1 Complete Gate** — flows mapped, awaiting credentials for Phase 2 |
-| `HAS_WORKSPACE` | → **Step 10: UPDATE MODE** |
+| `EXPLORATION_COMPLETE` | → Load the platform SKILL.md and jump directly to its **Phase 2** entry point (Web → Step W-7, macOS → Step 8). Announce: *"Phase 1 already complete — continuing to Phase 2."* |
+| `HAS_WORKSPACE` | → Load the platform SKILL.md and jump to its **Update Mode** section (Web → Step W-13, macOS → Step 12). Announce: *"Existing workspace found — entering update mode."* |
 
 ---
 
@@ -115,31 +122,7 @@ Reading screenshots, flow.md files, and accumulated tool output fills the contex
 Do NOT just acknowledge. The FIRST and ONLY action is to write the checkpoint. No other response until the file is written.
 
 1. **Immediately write `qa/state.md`** using the checkpoint template below — capture everything known at this exact moment: completed flows, pending flows, what was discovered, what was NOT yet written to files (note it as in-progress)
-2. **Generate the Allure report** for whatever phase is current:
-
-```bash
-# If in Phase 1 (discovery) or mixed progress:
-node scripts/allure/generate-phase1-report.js && npx allure generate allure-results -o allure-report --clean
-
-# If in Phase 2 (TCs written) — web platform:
-node scripts/allure/generate-phase2-report.js && npx allure generate allure-results -o allure-report --clean
-
-# If in Phase 2 — macOS/other platform:
-node scripts/allure/generate-phase2-report.js --mode standalone && npx allure generate allure-results -o allure-report --clean
-```
-
-**How to pick the right command**: check `qa/.qa-config.json` → if `test_cases_count > 0`, run the Phase 2 script. Otherwise run the Phase 1 script. Use this logic:
-
-```bash
-TC_COUNT=$(node -e "const c=require('./qa/.qa-config.json'); console.log(c.test_cases_count||0)")
-if [ "$TC_COUNT" -gt 0 ]; then
-  node scripts/allure/generate-phase2-report.js && npx allure generate allure-results -o allure-report --clean
-else
-  node scripts/allure/generate-phase1-report.js && npx allure generate allure-results -o allure-report --clean
-fi
-```
-
-3. **Then tell the user**:
+2. **Then tell the user**:
 
 > "✅ Checkpoint saved to `qa/state.md`
 >
@@ -150,14 +133,15 @@ fi
 > | Screenshots taken | [N] |
 > | TCs written | [N] |
 > | Stopped at | [exact step — e.g. 'Mid F-003 trace, step 4 of 7'] |
-> | Allure report | `allure-report/index.html` |
 >
 > Type `/clear` now to reset context, then paste:
 > `Read qa/state.md and continue QA for [AppName]`
 >
-> **To view the report**: `npm run allure:open`"
+> **To generate a report**: `npm run qa:report:open`"
 
 **If work was in-progress mid-flow** (e.g. stopped while tracing F-003 step 4): note the incomplete flow explicitly in the state file under "In Progress" so the resume picks it up from the right point — not from the beginning of that flow.
+
+**Do NOT generate the Allure report on every stop/reset.** Report generation is expensive and consumes context. Only generate reports at phase boundaries (Phase 1 complete, Phase 2 complete, all phases done) or when the user explicitly asks for a report.
 
 ---
 
@@ -167,28 +151,26 @@ Reset the context window after:
 
 | Trigger | Action |
 |---------|--------|
-| User says "stop", "pause", or "save state" | → **STOP handler above — write state file + Allure report** |
-| Each flow fully traced in Phase 1 (flow.md written) | → Write checkpoint, tell user resume command |
-| Each flow's TCs fully written in Phase 2 | → Write checkpoint, tell user resume command |
+| User says "stop", "pause", or "save state" | → **STOP handler above — write state file only** |
+| Each flow fully traced in Phase 1 (flow.md written) | → Append to state file, tell user resume command |
+| Each flow's TCs fully written in Phase 2 | → Append to state file, tell user resume command |
 | Conversation exceeds ~15 tool calls | → Write checkpoint proactively before continuing |
 
 ### How to Reset After a Flow
 
 After writing `flow.md` and the discovery evidence table for any flow:
 
-1. **Write checkpoint** to `qa/state.md` — record every flow completed, every flow pending, the exact next step
+1. **Append to `qa/state.md`** — mark this flow done, list the next flow pending. Do NOT rewrite the entire state file — just update the Flows table and Resume Instructions section.
 2. **Tell the user**:
 
-> "Flow **F-NNN — [Name]** complete. Saving context and resetting.
+> "Flow **F-NNN — [Name]** complete ✅ ([N] screenshots).
 >
-> Context used so far: [N] flows traced, [N] screenshots read.
->
-> **To continue**: start a new conversation and say:
-> `Read qa/state.md and continue Phase 1. Next flow: F-[NNN+1] — [name].`
->
-> Or say **'continue'** here and I'll carry on — but a fresh context is recommended after every 2-3 flows."
+> **To continue**: say **'continue'** or start a new conversation and say:
+> `Read qa/state.md and continue Phase 1. Next flow: F-[NNN+1] — [name].`"
 
-3. If the user says **'continue'** — proceed to the next flow but watch for context pressure. Reset at the next flow regardless.
+3. If the user says **'continue'** — proceed to the next flow immediately. Recommend a fresh context after every 2-3 flows, but don't force it.
+
+**Keep resets lightweight.** The goal is: write flow.md → update state.md → move on. No coverage checks, no report generation, no inventory updates mid-session. Those happen at phase boundaries only.
 
 ### The State File Is the Memory
 
@@ -220,19 +202,22 @@ All platforms share a single state file: `qa/state.md`. Testing a different app 
 
 ### When to Write a Checkpoint
 
-| Trigger | What to record |
-|---------|---------------|
-| After Step 1 (workspace init) | Framework, platform, directories created |
-| After Step 2 (app selected) | App name, URL/path, metadata, auth type |
-| **After each flow traced in Phase 1** | Flow slug, screenshot count, key observations, next flow pending — then reset context |
-| After Phase 1 Complete Gate | All flows list, which need auth, total screenshots |
-| **After each flow's TCs written in Phase 2** | TCs written for this flow, remaining flows + TC counts — then reset context |
-| After Step 9 (finalize) | Final counts, run commands |
-| Whenever the user says "stop", "pause", or "save state" | Full snapshot of current progress |
+| Trigger | What to record | Weight |
+|---------|---------------|--------|
+| After Step 1 (workspace init) | Framework, platform, directories created | Light |
+| After Step 2 (app selected) | App name, URL/path, metadata, auth type | Light |
+| **After each flow traced in Phase 1** | Flow slug, screenshot count, next flow pending | **Light — append only, no coverage checks or reports** |
+| **Phase 1 → Phase 2 boundary** | All flows, coverage check, Allure report | **Heavy — this is where deferred work runs** |
+| **After each flow's TCs written in Phase 2** | TCs written for this flow, remaining flows | **Light — append only** |
+| **Phase 2 → Phase 3 boundary** | All scenarios, Allure report | **Heavy** |
+| After final phase (finalize) | Final counts, Allure report, run commands | Heavy |
+| Whenever the user says "stop", "pause", or "save state" | Full snapshot of current progress | Light |
 
 ### How to Write the Checkpoint
 
-Write (or overwrite) `qa/state.md` using this template. Fill every section with real values — no placeholders left blank.
+**Light checkpoints** (per-flow): Update only the Flows table and Resume Instructions in the existing `qa/state.md`. Do NOT rewrite the entire file — just mark the completed flow and update the next action.
+
+**Heavy checkpoints** (phase boundaries, stop/pause): Write (or overwrite) the full `qa/state.md` using this template. Fill every section with real values — no placeholders left blank.
 
 ````markdown
 # QA Session State — [OS/Platform]
@@ -308,21 +293,11 @@ Read qa/state.md and continue QA for [AppName]. Next: [exact next action].
 
 ### After Writing the Checkpoint
 
-Generate the Allure report (same logic as the STOP handler — Phase 1 or Phase 2 based on `test_cases_count`):
-
-```bash
-TC_COUNT=$(node -e "const c=require('./qa/.qa-config.json'); console.log(c.test_cases_count||0)")
-if [ "$TC_COUNT" -gt 0 ]; then
-  node scripts/allure/generate-phase2-report.js && npx allure generate allure-results -o allure-report --clean
-else
-  node scripts/allure/generate-phase1-report.js && npx allure generate allure-results -o allure-report --clean
-fi
-```
-
 Tell the user:
 > "✅ Checkpoint saved to `qa/state.md` — [N] flows, [N] scenarios, [N] TCs written, [N] pending.
-> Allure report generated at `allure-report/index.html` — run `npm run allure:open` to view.
 > To resume: start a new conversation and say **'Read qa/state.md and continue QA for [AppName]'**"
+
+**Report generation is deferred** — only generate the Allure report at phase boundaries or when the user asks. Do NOT run `node scripts/allure/generate-report.js` on every checkpoint — it wastes context that should be spent tracing flows.
 
 ---
 
@@ -386,190 +361,20 @@ mkdir -p qa/test-cases/P4-low
 
 #### Write README in every directory
 
-Write the following README files immediately after creating the directories. Use the actual app name and platform from earlier steps where shown as `[AppName]` / `[platform]`.
+Write a short README in each `qa/` subdirectory explaining its purpose. Each README should have:
+- A `# title` with the directory path and short description
+- What files belong there and what formats are accepted
+- One sentence on how the agent uses the contents
 
-**`qa/README.md`**
-```markdown
-# QA Workspace
+**Directories that need READMEs**: `qa/`, `qa/context/`, `qa/context/feature-specs/`, `qa/context/figma-screens/`, `qa/planning/`, `qa/guardrails/`, `qa/credentials/`, `qa/scope/`, `qa/knowledgebase/`, `qa/evidence/`, `qa/runs/`.
 
-Auto-generated by `/native-qa init` — do not manually edit the structure.
-This entire directory is gitignored and recreated fresh each session.
+**Key points to include**:
+- `qa/context/` — the only directory the user populates manually. Accepts: Figma PNGs, PRDs (.md/.txt), specs, screenshots. Agent reads everything here in Step 3.
+- `qa/credentials/` — structure only, NEVER real values. Real credentials go in `.env.qa` (gitignored).
+- `qa/knowledgebase/` — auto-generated during Phase 1. Contains screenshots, ui-inventory.md, nav-graph.md, personas.md.
+- `qa/README.md` — include a "Resume a session" section: `Read qa/state.md and continue QA for [AppName]`
 
-## App under test
-- **App**: [AppName]
-- **Platform**: [platform]
-- **Framework**: [flow-based / feature-based / risk-based]
-
-## Directory map
-| Directory | Purpose |
-|-----------|---------|
-| `context/` | Prior knowledge inputs — the only things you place here manually |
-| `planning/` | Platform info and test environment setup |
-| `guardrails/` | What to do and not do during testing |
-| `credentials/` | Credential structure (no real values — use `.env.qa`) |
-| `scope/` | What is and isn't in scope for this QA cycle |
-| `knowledgebase/` | Discovery output — screenshots, UI inventory, flow maps |
-| `flows/` | One directory per user flow: flow.md + scenarios.md + test cases |
-| `evidence/` | Screenshots and artifacts captured during test runs |
-| `runs/` | Test run summaries and Playwright JSON results |
-| `state.md` | Session checkpoint — resume from here in a new conversation |
-
-## Resume a session
-Open a new conversation in this repo and say:
-**"Read qa/state.md and continue QA for [AppName]"**
-```
-
-**`qa/context/README.md`**
-```markdown
-# qa/context — Prior Knowledge Inputs
-
-The only directory under `qa/` that you populate manually.
-Everything else in `qa/` is auto-generated by the skill.
-
-## How to use
-
-During Step 3 the skill asks how you want to provide background on the app.
-If you choose **"Drop files"**, place your context here and say "ready".
-
-## What to drop here
-
-You can mix and match — drop whatever you have:
-
-| What you have | What to drop |
-|---------------|-------------|
-| Figma designs | Export screens as PNG or JPG into `figma-screens/` |
-| Product spec / PRD | Drop as `.md` or `.txt` (any filename) |
-| GitHub README or notes | Copy in as a `.md` file |
-| Feature specs | Drop `.md` files into `feature-specs/` |
-| App screenshots | Drop as `.png` into root or `figma-screens/` |
-| Known bugs / edge cases | Any `.md` or `.txt` file |
-
-## What the agent does with it
-
-The agent reads every file here — markdown as text, images visually via AI vision.
-It extracts: flows, features, navigation structure, edge cases, auth type, priority areas.
-Then it launches the app to validate what it found.
-
-No fixed filenames required. Drop anything — the agent reads it all.
-```
-
-**`qa/context/feature-specs/README.md`**
-```markdown
-# qa/context/feature-specs — Feature Specification Files
-
-Drop feature spec and acceptance criteria files here.
-Accepted formats: Markdown (.md), plain text (.txt).
-
-Examples:
-- `auth-spec.md` — authentication requirements
-- `onboarding-spec.md` — onboarding flow acceptance criteria
-- `dashboard-spec.md` — dashboard feature details
-
-The agent reads every file here during Step 3 and maps them to test flows.
-```
-
-**`qa/context/figma-screens/README.md`**
-```markdown
-# qa/context/figma-screens — Figma Screen Exports
-
-Drop exported Figma screens or app screenshots here (PNG or JPG).
-The agent reads each image visually to identify screens, navigation patterns,
-form states, and UI elements — then maps them to test flows.
-
-Tip: descriptive filenames help, but any name works.
-Examples: `01-homepage.png`, `02-login-form.png`, `03-dashboard-empty.png`
-```
-
-**`qa/planning/README.md`**
-```markdown
-# qa/planning — Test Planning
-
-Contains environment and platform documentation generated during init.
-
-| File | Contents |
-|------|----------|
-| `platforms.md` | App metadata, OS version, architecture, test environments |
-```
-
-**`qa/guardrails/README.md`**
-```markdown
-# qa/guardrails — QA Rules
-
-What to do and not do when running tests for [AppName].
-Generated during init based on the platform and app type.
-
-| File | Contents |
-|------|----------|
-| `do-and-dont.md` | Specific dos/don'ts: delays, test accounts, state cleanup, system dialogs |
-```
-
-**`qa/credentials/README.md`**
-```markdown
-# qa/credentials — Credential Structure
-
-Defines what credentials are needed and how to supply them.
-NEVER store real values here — this directory is gitignored but treat it as if it isn't.
-
-Real credentials go in `.env.qa` at the repo root (also gitignored).
-Copy `.env.example` to `.env.qa` and fill in your values.
-
-| File | Contents |
-|------|----------|
-| `access.md` | What accounts/tokens are needed and how to obtain them |
-```
-
-**`qa/scope/README.md`**
-```markdown
-# qa/scope — QA Scope Contract
-
-Defines what is and isn't being tested in this QA cycle.
-
-| File | Contents |
-|------|----------|
-| `contract.md` | In-scope flows, out-of-scope areas, definition of done |
-```
-
-**`qa/knowledgebase/README.md`**
-```markdown
-# qa/knowledgebase — Discovery Knowledge Base
-
-Auto-generated during Phase 1 exploration. Do not edit manually.
-Regenerated every time the skill runs a fresh discovery.
-
-| Path | Contents |
-|------|----------|
-| `screenshots/` | Screenshots taken during discovery — one per page/step |
-| `ui-inventory.md` | Human-readable list of all discovered UI elements and pages |
-| `ui-inventory.json` | Machine-readable version of the UI inventory |
-| `discover.js` | Playwright script used for web app crawling (web platform only) |
-| `visual-baselines/` | Playwright snapshot baselines for visual regression tests |
-```
-
-**`qa/evidence/README.md`**
-```markdown
-# qa/evidence — Test Run Evidence
-
-Screenshots and artifacts captured when test cases execute.
-One subdirectory per test run, named by date/run ID.
-Gitignored — regenerated on each test run.
-
-Never reference files in this directory in test case source — use paths relative to the run.
-```
-
-**`qa/runs/README.md`**
-```markdown
-# qa/runs — Test Run Summaries
-
-Contains run summary reports and Playwright JSON results.
-Gitignored — regenerated on each test run.
-
-| File pattern | Contents |
-|-------------|----------|
-| `RUN-YYYYMMDD-HHMMSS.md` | Human-readable run summary with pass/fail counts |
-| `playwright-results.json` | Raw Playwright JSON output (used for reporting) |
-```
-
-For the **flow/feature/test-cases directories**, write a README when each one is created during flow generation (Step 6), not here.
+Keep each README under 15 lines — enough for any human opening the directory to understand what it is. Do NOT include tables of contents or detailed howtos.
 
 ### 1.3 Write `.qa-config.json`
 
@@ -609,13 +414,52 @@ Proceed to **Step 2**.
 
 ## Step 2: App Selection
 
-Ask, tailoring to the selected platform:
+### 2.1 Pre-Read `.env.qa` — Check Before Asking
+
+**Before asking the user anything**, silently check if `.env.qa` already has the app configured:
+
+```bash
+[ -f ".env.qa" ] && cat .env.qa || echo "NO_ENV_FILE"
+```
+
+Parse the output. Extract ALL relevant values — not just the app URL/name:
+
+| Platform | Primary key | Also extract |
+|----------|------------|-------------|
+| **Web** | `QA_APP_URL` | `QA_TEST_EMAIL`, `QA_TEST_PASSWORD`, `QA_LLM_API_KEY`, `QA_LLM_PROVIDER`, `QA_ACCOUNT_TIER` |
+| **macOS** | `QA_APP_NAME` | same as above |
+| **Windows** | `QA_APP_NAME` | same as above |
+| **iOS / Android** | `QA_APP_NAME` | same as above |
+
+#### If the primary key is populated → confirm, don't ask
+
+> "Found in `.env.qa`:
+>
+> | Key | Value |
+> |-----|-------|
+> | `QA_APP_URL` | `https://app.example.com` |
+> | `QA_TEST_EMAIL` | ✅ set |
+> | `QA_TEST_PASSWORD` | ✅ set |
+> | `QA_LLM_API_KEY` | ✅ set / ❌ not set |
+> | ... | ... |
+>
+> I'll test **[URL or AppName]**. Correct? (yes / different app)"
+
+**STOP. Wait for confirmation.** If user says "yes" or equivalent → store the values and proceed. If user provides a different app → use that instead.
+
+#### If the primary key is empty or `.env.qa` doesn't exist → ask
+
+Tailored to the selected platform:
 > **macOS**: "What application would you like to test? (e.g., 'Slack', 'Figma', 'MyApp')"
 > **Web**: "What URL or web app would you like to test? (e.g., 'https://app.example.com')"
 > **Windows**: "What application would you like to test? (e.g., 'Notepad', 'MyApp')"
 > **iOS / Android**: "What app would you like to test? (bundle ID or app name — e.g., 'com.example.myapp')"
 
 Wait for the answer. Store the app name / URL.
+
+### 2.2 Remember What `.env.qa` Contains
+
+Store the full credential inventory from 2.1 in memory for the rest of the session. This inventory is used by the Credential Gate Protocol during Phase 1 (platform skill Step W-2.4 / macOS Step 6.5) to **auto-fill credentials without asking the user again**. Do not re-read `.env.qa` repeatedly — read once here, use everywhere.
 
 → **Write checkpoint** to `qa/state.md`. Record: platform, framework, app name provided.
 
@@ -730,17 +574,13 @@ skills/android/SKILL.md  → Android apps (UIAutomator2 + ADB)
 
 The platform skill is **fully self-contained** — it carries everything needed from Step 4 onward:
 
-| Step | What happens |
-|------|-------------|
-| **Step 4** | App metadata: locate app, read version / bundle ID, detect OS version |
-| **Step 5** | Launch app + first screenshot |
-| **Step 6** | Deep exploration + UI enumeration (inline automation script) |
-| **Step 6.5** | Happy flow tracing — screenshot at every step (Phase 1) |
-| **Step 7** | Flow creation + Phase 1 complete gate |
-| **Step 8** | Credential acquisition + scenario generation (Phase 2) |
-| **Step 9** | Test case generation (inline interaction driver) |
-| **Step 10** | Finalize + HTML report generation |
-| **Step 11** | Update mode (re-discover, add flows, full refresh) |
+| Phase | Steps | What happens |
+|-------|-------|-------------|
+| **Phase 1: Discovery** | Steps 4–7 | App metadata → launch → explore → nav graph → personas → trace E2E journeys → flow.md |
+| **Phase 2: Scenarios** | Step 8 | Credential acquisition (if needed) → auth tracing → scenario generation → scenarios.md |
+| **Phase 3: Test Cases** | Step 9 | TC generation → TC-NNN-*.md with runnable code |
+| **Phase 4: Execution** | Steps 10–11 | Extract specs → run tests → unified report |
+| **Update mode** | Step 12 | Re-discover, add flows, full refresh |
 
 No other files are required. All automation scripts, templates, and references are inlined in the platform skill.
 
