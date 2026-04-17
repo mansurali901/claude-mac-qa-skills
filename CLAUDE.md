@@ -192,7 +192,7 @@ qa/
 | `skills/web/references/playwright-patterns.md` | Playwright patterns for web TCs |
 | `skills/web/references/selector-strategies.md` | Selector strategies for SPAs |
 | `scripts/qa-screenshot.js` | Atomic screenshot + flow.md registration — prevents orphaned screenshots. Used as CLI and module. |
-| `scripts/allure/generate-report.js` | Standalone HTML report — reads ALL data (flows, scenarios, TCs) and produces one self-contained `qa-report.html` with embedded screenshots. No external dependencies (no Java, no allure-commandline). Works when opened directly via `file://`. Use `--open` to auto-open in browser. |
+| `scripts/allure/generate-report.js` | Standalone HTML report — reads ALL data (flows, scenarios, TCs) and produces a self-contained session-based report at `qa/reports/<app-slug>-<timestamp>.html` with embedded screenshots. No external dependencies (no Java, no allure-commandline). Works when opened directly via `file://`. Use `--open` to auto-open in browser. Use `--out <path>` to override the output location. |
 | `.env.example` | Template for `.env.qa` — all supported env vars |
 
 ---
@@ -233,7 +233,7 @@ cp .env.example .env.qa
 - Each `scenarios.md` has at least 5 scenarios covering multiple categories
 - Each `TC-NNN-*.md` has a runnable automation block (AppleScript or Playwright TypeScript)
 - No credentials appear in any tracked file
-- `qa-report.html` generated at **phase boundaries only** (Phase 1→2, Phase 2→3, final) or when user explicitly requests — NOT on every stop/checkpoint. Per-flow resets are lightweight (state file only).
+- Session report (`qa/reports/<app-slug>-<timestamp>.html`) generated at **phase boundaries only** (Phase 1→2, Phase 2→3, final) or when user explicitly requests — NOT on every stop/checkpoint. Per-flow resets are lightweight (state file only). Each invocation writes a new timestamped file so prior sessions are preserved.
 
 ---
 
@@ -280,7 +280,7 @@ qa/evidence/
 qa/knowledgebase/screenshots/
 qa/crawl-state.json
 qa/.auth/
-qa-report.html
+qa/reports/
 playwright-report/
 allure-results/
 allure-report/

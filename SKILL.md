@@ -72,11 +72,24 @@ Wait for the user's choice:
 - **"2"** or **"new"** → **Clean up the old workspace first**, then proceed to Step 0.2 as INIT:
 
   ```bash
-  rm -rf qa/
+  # Cross-platform recursive remove with retries for Windows file locks
+  # (browser tabs, Playwright/Chromium processes, read-only files under .auth/)
+  node -e "require('fs').rmSync('qa',{recursive:true,force:true,maxRetries:10,retryDelay:250})"
+
+  # Verify — if anything remains, a process still has a file open
+  if [ -d "qa" ]; then
+    echo "ERROR: qa/ still exists after cleanup. Likely causes:"
+    echo "  - Browser tab open on qa/reports/*.html → close it"
+    echo "  - Playwright/Chromium process still running → kill it"
+    echo "  - File in qa/.auth/ is read-only or locked"
+    ls -la qa/ 2>&1 | head
+    echo "Fix the lock, then re-run the same action."
+    exit 1
+  fi
   echo "Old workspace removed. Starting fresh."
   ```
 
-  This ensures Step 0.2 correctly detects INIT mode. Do NOT skip this cleanup — without it the old `qa/` folder causes Step 0.2 to detect a stale mode instead of INIT.
+  This ensures Step 0.2 correctly detects INIT mode. Do NOT skip this cleanup — without it the old `qa/` folder causes Step 0.2 to detect a stale mode instead of INIT. If cleanup fails with "qa/ still exists", it means a process is holding a file lock — **do not** try to work around it by skipping cleanup; close the locking process and retry.
 
 #### If state file does NOT exist — proceed silently
 

@@ -30,14 +30,24 @@ const { execSync } = require('child_process');
 
 const REPO_ROOT = process.cwd();
 const QA_DIR = path.join(REPO_ROOT, 'qa');
+const REPORTS_DIR = path.join(QA_DIR, 'reports');
 const SCREENSHOTS_DIR = path.join(QA_DIR, 'knowledgebase', 'screenshots');
 
 const args = process.argv.slice(2);
 const outIdx = args.indexOf('--out');
-const OUTPUT_PATH = outIdx !== -1
-  ? path.resolve(args[outIdx + 1])
-  : path.join(REPO_ROOT, 'qa-report.html');
 const OPEN = args.includes('--open');
+
+function slugify(s) {
+  return String(s || 'app').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'app';
+}
+
+function sessionFilename(appName) {
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('Z')[0];
+  return `${slugify(appName)}-${ts}.html`;
+}
+
+// OUTPUT_PATH is resolved after config is read (needs app_name) unless --out is given
+const EXPLICIT_OUT = outIdx !== -1 ? path.resolve(args[outIdx + 1]) : null;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -526,6 +536,10 @@ function main() {
   if (!hasTcs) console.log('    [..] No test cases yet');
 
   console.log(`  Phase 4 — ${counts.specs > 0 ? counts.specs + ' specs ready' : 'No specs yet'}`);
+
+  // Resolve output path (session-based by default)
+  const OUTPUT_PATH = EXPLICIT_OUT || path.join(REPORTS_DIR, sessionFilename(appName));
+  fs.mkdirSync(path.dirname(OUTPUT_PATH), { recursive: true });
 
   // Generate HTML
   const html = buildHtml(config, flowEntries, counts, coverage);

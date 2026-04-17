@@ -21,7 +21,7 @@ Phase 4: Test Execution    → Extract .spec.ts → run Playwright tests → pas
 - **Credentials required** — must ask user for auth/API keys
 - **Context full** — must checkpoint to `qa/state.md` and reset
 
-**Report timing**: `node scripts/allure/generate-report.js --open` generates a self-contained `qa-report.html` with embedded screenshots. No Java or allure-commandline needed — works when opened directly. Only run at **phase boundaries** (Phase 1→2, 2→3, 3→4, final) or when user asks — never on per-flow resets.
+**Report timing**: `node scripts/allure/generate-report.js --open` generates a self-contained session report at `qa/reports/<app-slug>-<timestamp>.html` with embedded screenshots. No Java or allure-commandline needed — works when opened directly. Each run writes a new timestamped file so prior sessions are preserved. Only run at **phase boundaries** (Phase 1→2, 2→3, 3→4, final) or when user asks — never on per-flow resets.
 
 ---
 
