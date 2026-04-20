@@ -16,6 +16,13 @@ version: 0.1.0
 - Android Emulator or physical device connected (`adb devices` shows device)
 - Appium + UIAutomator2 driver installed
 
+## Shared Principles & Fallback Discipline (applies when implemented)
+
+Before any platform work, read:
+- [skills/_shared/principles.md](../_shared/principles.md)
+- [skills/_shared/fingerprint-questions.md](../_shared/fingerprint-questions.md) — drives `qa/platform-fingerprint.md` in Step 3.5
+- [skills/_shared/fallback-discipline.md](../_shared/fallback-discipline.md) — every strategy, runtime script, and test step must declare a fallback; never break the flow.
+
 ## Pre-Step: Load Prior Knowledge (required when implemented)
 
 All platform skills must begin by reading `qa/knowledgebase/ui-inventory.md` (built from `qa/context/` in Step 3) before starting any device interaction. See macOS skill for the reference implementation.

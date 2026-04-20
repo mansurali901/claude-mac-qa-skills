@@ -77,13 +77,16 @@ Wait for the user's choice:
 
   # Verify — if anything remains, a process still has a file open
   if [ -d "qa" ]; then
-    echo "WARN: qa/ still exists after cleanup."
+    echo "ERROR: qa/ still exists after cleanup."
+    echo "  A process is holding a file lock — close the locking tool and retry."
+    echo "  (See your platform skill's resume notes for likely culprits.)"
     ls -la qa/ 2>&1 | head
+    exit 1
   fi
-  echo "Old workspace removed (or flagged for engagement). Starting fresh."
+  echo "Old workspace removed. Starting fresh."
   ```
 
-  This ensures Step 0.2 correctly detects INIT mode. **Engagement protocol** (`skills/_shared/engagement-protocol.md`): if `qa/` still exists after the rm, do NOT `exit 1`. Surface to the user via AskUserQuestion with three options: (a) identify the locking process and retry, (b) rename `qa/` to `qa-old-<timestamp>/` and continue, (c) halt with resume instructions. Never terminate silently.
+  This ensures Step 0.2 correctly detects INIT mode. Do NOT skip this cleanup — without it the old `qa/` folder causes Step 0.2 to detect a stale mode instead of INIT. If cleanup fails with "qa/ still exists", a process is holding a file lock — **do not** try to work around it by skipping cleanup; close the locking process and retry.
 
 #### If state file does NOT exist — proceed silently
 
@@ -574,17 +577,6 @@ Before handing off to the platform skill, classify the app so Step 4 onward can 
 ### 3.6 Decisions Log Bootstrap
 
 Create `qa/decisions.md` with a one-line header: `# Decisions Log — append-only audit trail`. Every subsequent strategy choice, tool selection, boundary justification, deviation from defaults, or runtime script update appends one dated entry. Never rewritten. See `skills/_shared/fallback-discipline.md` for the entry format.
-
-### 3.7 Preflight (delegated to platform skill)
-
-Before any exploration runs, execute the preflight defined by the selected platform skill (web → Step W-1.5; macOS → built-in accessibility check). The preflight **MUST NOT throw**. For each missing item — runtime toolchain, browser binary, config file, required env var — report the gap and ask the user via `AskUserQuestion` whether to:
-
-- **(a)** auto-install / auto-create with the user's consent,
-- **(b)** provide a value now so the skill writes `.env.qa`,
-- **(c)** let the user fix it manually and type "continue",
-- **(d)** skip that feature for this run.
-
-See `skills/_shared/engagement-protocol.md`. Per-role credentials are **deferred** to the role-confirmation gate (web W-2.5) — preflight only checks the global baseline (`.env.qa` exists, `QA_APP_URL` set, `QA_TEST_EMAIL`/`PASSWORD` for the default role).
 
 ---
 

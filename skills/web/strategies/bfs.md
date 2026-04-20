@@ -1,0 +1,751 @@
+---
+name: web-strategy-bfs
+description: Breadth-First Search exploration strategy for web apps. Default for dashboard / multi-page apps with rich nav. Verbatim runbook with declared fallback.
+type: strategy
+platform: web
+---
+
+# Strategy — BFS Deep Crawl
+
+> ⚠️ **THIS IS AN EXAMPLE AND PREFERRED SUGGESTION — NOT A MANDATE.**
+> You may deviate based on the observed app character, but you MUST:
+> 1. Log the deviation in `qa/decisions.md` with rationale.
+> 2. Declare a fallback. If your chosen approach stalls, fall back and continue — never break the flow.
+
+**Best for**: Dashboard / multi-page apps with rich navigation, persistent sidebars, many feature areas to inventory.
+
+**Stall signals**: Queue empty before MAX_PAGES with low coverage; repeated nav failures; same fingerprint hit on >50% of pages; click-based nav consistently fails to advance.
+
+**Declared fallback**: Switch to **direct-URL probing** of links collected so far. Take the `state.queue` and `hrefLinks` accumulated, drop the click-based nav layer, and `page.goto()` each unique URL with verification. If that also stalls (e.g. soft-404 everywhere), switch to `sitemap-spot-check` (read `/sitemap.xml`). Log every switch in `qa/decisions.md`.
+
+**Outcome classification**: every interaction calls `qa/scripts/outcome-classifier.js` (see `skills/web/helpers/outcome-classifier.md`) and branches on the returned label. ONLY `no-change` increments `consecutiveStalls`. `error-surfaced` / `auth-rejected-server` / `form-reset-silent` / `network-timeout` engage the user via `AskUserQuestion` — never silently counted as a stall. **Login forms are handled via `qa/scripts/login-engage.js`** (see `skills/web/helpers/login-engage.md`); direct fill+click is forbidden.
+
+---
+
+### Step W-2: BFS Deep Crawl — Discover Every Page
+
+**This is the most important step.** Use Breadth-First Search to discover every reachable page in the application. Do NOT stop at 1-hop from the homepage.
+
+**Key fixes applied in this section:**
+- Every navigation is **verified** — screenshot is named by the ACTUAL page, not the intended URL
+- A **configurable minimum wait** runs before every screenshot (`QA_PAGE_WAIT_MS`)
+- BFS stops at **`QA_MAX_PAGES`** and **`QA_MAX_DEPTH`** to prevent context exhaustion
+- BFS state is **saved to disk** (`qa/crawl-state.json`) after every page — survives context resets
+- Screenshots are taken **AFTER** hidden content is revealed, not before
+- Buttons are clicked through a **safe whitelist** — dangerous actions are never triggered
+- **Content fingerprinting** flags duplicate pages that have different URLs but identical content
+
+#### W-2.1: Launch Browser, Read Config, Initialize State
+
+```javascript
+const fs = require('fs');
+const path = require('path');
+const { chromium } = require('@playwright/test');
+require('dotenv').config({ path: '.env.qa' });
+const { capture } = require('../scripts/qa-screenshot');
+
+// ═══ CONFIG — from .env.qa with safe defaults ═══
+const CONFIG = {
+  pageWaitMs:  parseInt(process.env.QA_PAGE_WAIT_MS || '2000'),
+  maxPages:    parseInt(process.env.QA_MAX_PAGES || '50'),
+  maxDepth:    parseInt(process.env.QA_MAX_DEPTH || '5'),
+  navTimeout:  parseInt(process.env.QA_NAV_TIMEOUT || '15000'),
+};
+
+const CRAWL_STATE_FILE = 'qa/crawl-state.json';
+
+// Pre-crawl: load ALL credentials from .env.qa into a map
+const credentials = {
+  email:    process.env.QA_TEST_EMAIL || '',
+  password: process.env.QA_TEST_PASSWORD || '',
+  apiKey:   process.env.QA_LLM_API_KEY || '',
+  provider: process.env.QA_LLM_PROVIDER || '',
+  secondaryEmail:    process.env.QA_SECONDARY_EMAIL || '',
+  secondaryPassword: process.env.QA_SECONDARY_PASSWORD || '',
+};
+const hasCredentials = !!(credentials.email || credentials.apiKey);
+
+const browser = await chromium.launch({ headless: process.env.QA_HEADLESS !== 'false' });
+const page = await browser.newPage();
+
+// ═══ BFS STATE — persisted to disk after every page ═══
+// If crawl-state.json exists from a previous run, resume from it.
+let state;
+if (fs.existsSync(CRAWL_STATE_FILE)) {
+  const saved = JSON.parse(fs.readFileSync(CRAWL_STATE_FILE, 'utf8'));
+  state = {
+    visited: new Set(saved.visited),
+    queue: saved.queue,               // Array of { url, depth }
+    pages: saved.pages,               // Discovered page manifest
+    fingerprints: new Map(Object.entries(saved.fingerprints || {})),
+    duplicates: saved.duplicates || [],
+    pageCount: saved.pageCount || 0,
+    isAuthenticated: saved.isAuthenticated || false,
+  };
+  console.log(`Resuming BFS: ${state.visited.size} visited, ${state.queue.length} queued`);
+} else {
+  state = {
+    visited: new Set(),
+    queue: [{ url: process.env.QA_APP_URL, depth: 0 }],
+    pages: [],
+    fingerprints: new Map(),
+    duplicates: [],
+    pageCount: 0,
+    isAuthenticated: false,
+  };
+}
+
+function saveCrawlState() {
+  fs.writeFileSync(CRAWL_STATE_FILE, JSON.stringify({
+    visited: [...state.visited],
+    queue: state.queue,
+    pages: state.pages,
+    fingerprints: Object.fromEntries(state.fingerprints),
+    duplicates: state.duplicates,
+    pageCount: state.pageCount,
+    isAuthenticated: state.isAuthenticated,
+    savedAt: new Date().toISOString(),
+  }, null, 2));
+}
+```
+
+#### W-2.2: Utility Functions — Wait, Verify, Normalize
+
+These functions are used throughout the BFS loop. Define them before the loop starts.
+
+**URL Normalization** — prevents visiting the same page under different URL forms:
+
+```javascript
+function normalizeUrl(raw) {
+  try {
+    const u = new URL(raw);
+    // Strip: trailing slash, hash, tracking params
+    let normalized = `${u.protocol}//${u.hostname}${u.pathname}`
+      .replace(/\/+$/, '');
+    // Keep meaningful query params, strip tracking
+    const tracking = new Set([
+      'utm_source', 'utm_medium', 'utm_campaign', 'utm_content',
+      'ref', 'fbclid', 'gclid', '_ga',
+    ]);
+    const params = new URLSearchParams(u.search);
+    const kept = [];
+    for (const [k, v] of params) {
+      if (!tracking.has(k)) kept.push(`${k}=${v}`);
+    }
+    if (kept.length) normalized += `?${kept.sort().join('&')}`;
+    return normalized.toLowerCase();
+  } catch {
+    return raw;
+  }
+}
+```
+
+**Page Wait** — configurable minimum + load state. Simple and reliable:
+
+```javascript
+async function waitForPageReady(page) {
+  // 1. Wait for DOM to be ready — non-negotiable baseline
+  await page.waitForLoadState('domcontentloaded');
+
+  // 2. Configurable minimum wait — gives JS frameworks time to hydrate.
+  //    User tunes this via QA_PAGE_WAIT_MS in .env.qa.
+  //    Default 2000ms works for most apps. Slow apps: set 3000-4000.
+  await page.waitForTimeout(CONFIG.pageWaitMs);
+}
+```
+
+> **Why a simple minimum wait instead of DOM mutation observers or spinner detection?**
+> MutationObservers never settle on apps with animations or live data. Spinner detection by class name is fragile. A configurable minimum wait is predictable, works on every app, and the user can tune it. If 2000ms isn't enough, set `QA_PAGE_WAIT_MS=3000` in `.env.qa`.
+
+**Page Verification** — confirms the agent arrived at the intended page:
+
+```javascript
+async function verifyNavigation(page, intendedUrl) {
+  const actualUrl = page.url();
+  const intendedPath = new URL(intendedUrl).pathname.replace(/\/+$/, '');
+  const actualPath = new URL(actualUrl).pathname.replace(/\/+$/, '');
+  const redirected = intendedPath !== actualPath;
+
+  // Content fingerprint — detects same page at different URLs
+  const fingerprint = await page.evaluate(() => {
+    const h1 = (document.querySelector('h1') || {}).textContent || '';
+    const title = document.title || '';
+    return `${title.trim()}|||${h1.trim()}`.toLowerCase();
+  });
+
+  // Use ACTUAL path for the screenshot slug — not the intended one
+  const slug = actualPath.split('/').filter(Boolean).pop() || 'homepage';
+
+  return { intendedUrl, actualUrl, redirected, fingerprint, slug };
+}
+```
+
+**Error Page Detection** — broader than just "404 + not found":
+
+```javascript
+async function isErrorPage(page) {
+  return page.evaluate(() => {
+    const text = document.body.innerText.toLowerCase();
+    const h1 = (document.querySelector('h1') || {}).textContent || '';
+    const h1Lower = h1.toLowerCase();
+
+    // Explicit 404
+    if (/\b404\b/.test(text) && /not found|doesn.t exist/i.test(text))
+      return '404';
+    // "Page not found" without the number
+    if (/page not found|this page doesn.t exist|nothing here/i.test(h1Lower))
+      return 'not-found';
+    // Generic error with short content (not a feature page)
+    if (/something went wrong|unexpected error|oops/i.test(h1Lower) && text.length < 500)
+      return 'error';
+    // Empty SPA route — shell loaded but no meaningful content
+    const main = document.querySelector('main, [role="main"], #app, #root');
+    if (main && main.innerText.trim().length < 20
+        && !main.querySelector('input, button, form'))
+      return 'empty-route';
+
+    return null;
+  });
+}
+```
+
+---
+
+#### W-2.3: BFS Main Loop — Navigate, Verify, Interact, Screenshot
+
+**Loop order is critical.** Each step depends on the previous one completing correctly:
+
+```
+For each URL in the queue:
+  1. LIMIT CHECK — skip if max pages or max depth exceeded
+  2. NAVIGATE — click-based (SPA-safe), with fallbacks
+  3. WAIT — configurable minimum wait (QA_PAGE_WAIT_MS)
+  4. VERIFY — compare actual URL to intended URL
+  5. DEDUP — content fingerprint check (same page, different URL?)
+  6. ERROR CHECK — 404, empty route, generic error page
+  7. CREDENTIAL CHECK — detect input fields, auto-fill from .env.qa
+  8. REVEAL HIDDEN CONTENT — tabs, dropdowns, scroll (W-2.4)
+  9. SCREENSHOT — after everything is visible and settled
+  10. READ — visual analysis via Read tool
+  11. COLLECT LINKS — href scan + safe button discovery (W-2.5)
+  12. SAVE STATE — write crawl-state.json to disk
+```
+
+> **Why this order matters**: The old loop took screenshots at step 5 (before revealing hidden content) and named them by intended URL (before verification). This caused the hallucination bug — same screen, different filenames. The new order screenshots AFTER verification, AFTER interaction, using the ACTUAL URL for naming.
+
+```javascript
+// ═══ BEFORE THE LOOP — create seed-crawl flow directory ═══
+// capture() needs a flow directory to register screenshots.
+// Create it before the loop starts so capture() doesn't throw.
+const seedFlowDir = 'qa/flows/seed-crawl';
+fs.mkdirSync(path.join(seedFlowDir, 'test-cases'), { recursive: true });
+if (!fs.existsSync(path.join(seedFlowDir, 'flow.md'))) {
+  fs.writeFileSync(path.join(seedFlowDir, 'flow.md'),
+    '# Seed Crawl — BFS Discovery\n\n' +
+    '## Discovery Evidence\n\n' +
+    '| Step | Page/Screen | Action | Screenshot | Observed |\n' +
+    '|------|------------|--------|-----------|---------|');
+}
+
+while (state.queue.length > 0) {
+  const { url, depth } = state.queue.shift();
+  const normalized = normalizeUrl(url);
+
+  // ── 1. LIMIT CHECKS ──
+  if (state.visited.has(normalized)) continue;
+
+  if (state.pageCount >= CONFIG.maxPages) {
+    console.log(`⚠ MAX PAGES (${CONFIG.maxPages}) reached. Stopping BFS.`);
+    console.log(`  ${state.queue.length} URLs remain in queue — increase QA_MAX_PAGES to crawl more.`);
+    break;
+  }
+  if (depth > CONFIG.maxDepth) {
+    console.log(`⚠ Skipping ${url} — depth ${depth} exceeds QA_MAX_DEPTH (${CONFIG.maxDepth})`);
+    continue;
+  }
+
+  state.visited.add(normalized);
+
+  // ── 2. NAVIGATE — click-based, SPA-safe ──
+  const intendedPath = new URL(url).pathname;
+
+  if (state.pageCount === 0) {
+    // First page: load SPA shell via direct navigation
+    await page.goto(process.env.QA_APP_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: CONFIG.navTimeout,
+    });
+  } else {
+    let navigated = false;
+
+    // Try 1: Click <a> or [data-href] matching this path
+    for (const sel of [
+      `a[href="${intendedPath}"], a[href="${url}"], a[href$="${intendedPath}"]`,
+      `[data-href="${intendedPath}"], [data-to="${intendedPath}"]`,
+    ]) {
+      const lnk = page.locator(sel).first();
+      if (await lnk.count() > 0 && await lnk.isVisible().catch(() => false)) {
+        await lnk.click();
+        navigated = true;
+        break;
+      }
+    }
+
+    // Try 2: Text match — scoped to nav/header only (avoids footer duplicates)
+    if (!navigated) {
+      const slug = intendedPath.split('/').filter(Boolean).pop() || '';
+      if (slug) {
+        const navLink = page.locator('nav, header').first()
+          .locator('a, button, [role="link"], [role="menuitem"]')
+          .filter({ hasText: new RegExp(slug.replace(/-/g, '.'), 'i') }).first();
+        if (await navLink.count() > 0) {
+          await navLink.click();
+          navigated = true;
+        }
+      }
+    }
+
+    // Try 3: Reveal dropdown menus, then click
+    if (!navigated) {
+      for (const trigger of await page.locator(
+        'nav button[aria-haspopup], nav [aria-expanded], header button[aria-haspopup], details > summary'
+      ).all()) {
+        await trigger.click().catch(() => {});
+        await page.waitForTimeout(500);
+        const menuLink = page.locator(`a[href="${intendedPath}"], a[href$="${intendedPath}"]`).first();
+        if (await menuLink.count() > 0) {
+          await menuLink.click();
+          navigated = true;
+          break;
+        }
+        await page.keyboard.press('Escape');
+      }
+    }
+
+    // Last resort: direct navigation (may soft-404 on SPAs — caught by error check)
+    if (!navigated) {
+      await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: CONFIG.navTimeout,
+      }).catch(() => {
+        console.log(`⚠ Navigation timeout for ${url}`);
+      });
+    }
+  }
+
+  // ── 3. WAIT — configurable minimum + DOM ready ──
+  await waitForPageReady(page);
+
+  // ── 4. VERIFY — did we actually arrive at the intended page? ──
+  const nav = await verifyNavigation(page, url);
+
+  if (nav.redirected) {
+    console.log(`↪ Redirect: ${url} → ${nav.actualUrl}`);
+    // Mark the actual URL as visited too — prevents re-visiting the redirect target
+    state.visited.add(normalizeUrl(nav.actualUrl));
+  }
+
+  // ── 5. DEDUP — content fingerprint check ──
+  if (state.fingerprints.has(nav.fingerprint)) {
+    const original = state.fingerprints.get(nav.fingerprint);
+    console.log(`⚠ DUPLICATE: ${nav.actualUrl} has same content as ${original} — skipping`);
+    state.duplicates.push({ url: nav.actualUrl, duplicateOf: original });
+    saveCrawlState();
+    continue;
+  }
+  state.fingerprints.set(nav.fingerprint, nav.actualUrl);
+
+  // ── 6. ERROR CHECK — broader than just "404 + not found" ──
+  const errorType = await isErrorPage(page);
+  if (errorType) {
+    console.log(`⚠ ${errorType} detected at ${nav.actualUrl} — skipping screenshot`);
+    saveCrawlState();
+    continue;
+  }
+
+  // ── 7. CREDENTIAL CHECK — detect fields, auto-fill from .env.qa ──
+  const credFields = await page.evaluate(() => {
+    const fields = [];
+    document.querySelectorAll('input[type="password"]').forEach(el =>
+      fields.push({ type: 'password', label: (el.labels?.[0]?.textContent || el.placeholder || 'password').trim() })
+    );
+    document.querySelectorAll('input[type="email"], input[name*="email" i], input[placeholder*="email" i]').forEach(el =>
+      fields.push({ type: 'email', label: (el.placeholder || el.name || 'email').trim() })
+    );
+    document.querySelectorAll(
+      'input[placeholder*="key" i], input[placeholder*="token" i], input[placeholder*="api" i], ' +
+      'input[name*="key" i], input[name*="api" i], input[placeholder*="secret" i]'
+    ).forEach(el =>
+      fields.push({ type: 'api_key', label: (el.placeholder || el.name || 'api_key').trim() })
+    );
+    document.querySelectorAll('label').forEach(lbl => {
+      if (/key|token|secret|api/i.test(lbl.textContent)) {
+        const input = lbl.querySelector('input') || document.getElementById(lbl.htmlFor);
+        if (input) fields.push({ type: 'api_key', label: lbl.textContent.trim() });
+      }
+    });
+    document.querySelectorAll('input[name*="card" i], input[placeholder*="card" i], input[autocomplete*="cc-"]').forEach(el =>
+      fields.push({ type: 'payment', label: (el.placeholder || el.name || 'card').trim() })
+    );
+    return fields;
+  });
+
+  if (credFields.length > 0) {
+    // → Handle via Credential Gate Protocol (W-2.6)
+    // Auto-fill from .env.qa if available. Ask user if not.
+    // After successful auth, re-add gated URLs to queue.
+  }
+
+  // ── 8. REVEAL HIDDEN CONTENT — tabs, dropdowns, scroll (W-2.4) ──
+  // This runs BEFORE the screenshot so the capture shows the full page state.
+  // See W-2.4 section below for the full interaction code.
+
+  // ── 9. SCREENSHOT — AFTER verification, interaction, and reveal ──
+  state.pageCount++;
+  // Prefix with zero-padded counter to guarantee unique filenames.
+  // Without this, /user/settings and /admin/settings both produce page-settings.png.
+  const screenshotFile = `page-${String(state.pageCount).padStart(2, '0')}-${nav.slug}.png`;
+
+  await capture(page, {
+    flow: 'seed-crawl',
+    step: state.pageCount,
+    action: `Visit ${nav.actualUrl}`,
+    observed: '(pending visual analysis)',
+    page: nav.slug,
+    file: screenshotFile,
+  });
+
+  // ── 10. READ — visual analysis via Read tool ──
+  // READ the screenshot with the Read tool now.
+  // Write the actual observation back to the discovery evidence table.
+
+  // ── 11. COLLECT LINKS — href scan + safe button discovery (W-2.5) ──
+  const hrefLinks = await page.evaluate(() =>
+    [...document.querySelectorAll('a[href], [data-href], [data-to]')]
+      .map(el => el.href || el.dataset?.href || el.dataset?.to || '')
+      .filter(href => href && href.startsWith(window.location.origin))
+      .map(href => href.split('#')[0].split('?')[0])
+      .filter((v, i, a) => a.indexOf(v) === i)
+  );
+  for (const link of hrefLinks) {
+    if (!state.visited.has(normalizeUrl(link))) {
+      state.queue.push({ url: link, depth: depth + 1 });
+    }
+  }
+
+  // Safe button discovery — see W-2.5 for the whitelist logic
+  // Runs AFTER screenshot so button clicks don't corrupt the captured state.
+
+  // ── 12. RECORD — update page manifest and save to disk ──
+  state.pages.push({
+    url: nav.actualUrl,
+    intendedUrl: url,
+    redirected: nav.redirected,
+    screenshot: screenshotFile,
+    depth,
+    credFields: credFields.length > 0 ? credFields : undefined,
+    timestamp: new Date().toISOString(),
+  });
+
+  saveCrawlState();
+}
+
+// BFS complete
+console.log(`BFS done: ${state.pageCount} pages visited, ${state.duplicates.length} duplicates skipped`);
+saveCrawlState();
+```
+
+---
+
+#### W-2.4: Reveal Hidden Content — Runs BEFORE Screenshot
+
+On each page, AFTER wait + verification but BEFORE screenshot, reveal interactive content so the screenshot captures the full page state.
+
+```javascript
+// 1. Tabs — click each to reveal content
+const tabs = await page.locator('[role=tab], [data-tab], button[aria-selected]').all();
+for (const tab of tabs) {
+  await tab.click().catch(() => {});
+  await page.waitForTimeout(500);
+}
+
+// 2. Dropdowns/menus — open to discover links, then close
+const toggles = await page.locator(
+  '[aria-haspopup], details:not([open]) > summary'
+).all();
+for (const t of toggles) {
+  await t.click().catch(() => {});
+  await page.waitForTimeout(500);
+  // Collect links from the revealed content here
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+}
+
+// 3. Scroll — trigger lazy-loaded content
+await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+await page.waitForTimeout(CONFIG.pageWaitMs);  // Wait again after scroll
+await page.evaluate(() => window.scrollTo(0, 0));  // Scroll back to top for screenshot
+```
+
+> **Adapt to what you SEE.** After each screenshot READ, if you notice interactive elements not covered above (accordions, carousels, slide-out panels, mega-menus), write a custom click sequence for them.
+
+---
+
+#### W-2.5: Safe Button Discovery — Whitelist, Not Blacklist
+
+After the screenshot is taken, discover routes behind non-anchor buttons. **Only click buttons that look like navigation.** Never click destructive actions.
+
+```javascript
+// Labels that are NEVER safe to click during discovery
+const DANGEROUS = /delete|remove|cancel|log\s?out|sign\s?out|reset|clear|
+  unsubscribe|deactivate|close.account|revoke|disconnect|destroy|
+  disable|block|report|archive/i;
+
+// Labels that are likely navigation (safe to click)
+const SAFE_NAV = /view|open|go.to|see.all|see.more|more|details|explore|
+  learn|visit|show|browse|discover|manage|dashboard|settings|profile|
+  upgrade|pricing|docs|help|support|about/i;
+
+// Only scan nav and header — never click random buttons in main content
+const navButtons = await page.locator('nav, header').first()
+  .locator('button, [role="link"]:not(a), [role="menuitem"]:not(a)').all();
+
+const urlBeforeDiscovery = page.url();
+
+for (const el of navButtons) {
+  const text = (await el.textContent().catch(() => '')).trim();
+  if (!text || text.length > 50) continue;
+
+  // Skip dangerous labels
+  if (DANGEROUS.test(text)) {
+    console.log(`SKIP dangerous: "${text}"`);
+    continue;
+  }
+
+  // Only click if it looks like navigation
+  if (!SAFE_NAV.test(text)) {
+    console.log(`SKIP non-nav: "${text}"`);
+    continue;
+  }
+
+  await el.click().catch(() => {});
+  await page.waitForTimeout(CONFIG.pageWaitMs);
+
+  const urlAfterClick = page.url();
+  if (urlAfterClick !== urlBeforeDiscovery
+      && !state.visited.has(normalizeUrl(urlAfterClick))) {
+    state.queue.push({ url: urlAfterClick, depth: depth + 1 });
+    // Navigate back to continue discovery
+    await page.goBack().catch(() => {});
+    await page.waitForTimeout(CONFIG.pageWaitMs);
+  } else {
+    // No navigation — dismiss any popup
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+  }
+}
+```
+
+---
+
+#### W-2.6: Credential Gate Protocol — Proactive Detection
+
+**Triggered by**: The credential detection in W-2.3 step 7 finding ANY sensitive input field on a page — not just login/signup. This includes API key entry, payment forms, onboarding flows, token inputs, admin gates, SSO screens, etc.
+
+**When credential fields are detected on a page, do NOT stop crawling.** Handle inline.
+
+> ⛔ **HARD RULE**: If `.env.qa` has a value for a detected field, **you MUST auto-fill it**. You must NEVER click "Skip", "Set up later", "Maybe later", "Not now", or any bypass/dismiss button when the matching credential exists in `.env.qa`. The user provided those values specifically so you would use them. Skipping when values are available is a bug.
+
+1. **Identify what's needed** from the `credFields` detected in the loop:
+
+| Detected field type | `.env.qa` variable | Auto-fill? |
+|--------------------|--------------------|-----------|
+| `email` | `QA_TEST_EMAIL` | **MANDATORY** if set |
+| `password` | `QA_TEST_PASSWORD` | **MANDATORY** if set |
+| `api_key` | `QA_LLM_API_KEY` | **MANDATORY** if set |
+| Provider dropdown | `QA_LLM_PROVIDER` | **MANDATORY** if set — select matching option |
+| Model dropdown | Derive from provider or use default | Select if available |
+| `payment` (card) | Test card `4242 4242 4242 4242` | **MANDATORY** if Stripe detected |
+| Unknown / custom | — | Ask user |
+
+2. **If matching `.env.qa` values exist** → auto-fill is **MANDATORY**, not optional:
+
+```javascript
+// ═══ MANDATORY AUTO-FILL — never skip when values exist ═══
+
+// Provider dropdown (if present) — MUST be filled BEFORE API key
+if (credFields.some(f => f.type === 'api_key') && credentials.provider) {
+  const providerDropdown = page.locator('select, [role="listbox"], [role="combobox"]')
+    .filter({ hasText: /provider|model|select/i }).first();
+  if (await providerDropdown.count() > 0) {
+    await providerDropdown.click();
+    await page.waitForTimeout(500);
+    await page.getByRole('option', { name: new RegExp(credentials.provider, 'i') }).click()
+      .catch(() => page.locator(`[data-value*="${credentials.provider}" i]`).first().click())
+      .catch(() => {});
+    await page.waitForTimeout(1000);
+  }
+}
+
+// Email
+if (credFields.some(f => f.type === 'email') && credentials.email) {
+  await page.getByLabel(/email/i).fill(credentials.email);
+}
+
+// Password
+if (credFields.some(f => f.type === 'password') && credentials.password) {
+  await page.getByLabel(/password/i).fill(credentials.password);
+}
+
+// API key — fill AFTER provider dropdown is set
+if (credFields.some(f => f.type === 'api_key') && credentials.apiKey) {
+  await page.locator(
+    'input[placeholder*="key" i], input[name*="key" i], input[placeholder*="api" i], ' +
+    'input[placeholder*="token" i], input[name*="api" i]'
+  ).first().fill(credentials.apiKey);
+}
+
+// Submit — find the most likely submit button (NOT skip/later/dismiss)
+await page.getByRole('button', { name: /sign in|log in|submit|continue|sign up|save|connect|add|confirm/i }).click();
+await waitForPageReady(page);
+
+// Screenshot result → verify success (no error message visible)
+state.isAuthenticated = true;
+```
+
+> **Common trap — onboarding "Set up later" buttons**: Many apps show both a submit button AND a skip/later link on credential forms. When `.env.qa` has the value, ALWAYS click the submit/save/connect button — NEVER the skip/later/dismiss link. Read the screenshot after submission to verify it worked.
+
+3. **If NO matching values exist in `.env.qa`** → ask the user. **Never skip on your own.**
+
+```
+"Credential fields detected at [URL]:
+  - [list each field type + label found]
+  - .env.qa status: [which keys are set vs missing]
+
+How would you like to proceed?
+  1. Provide values now (I'll fill them)
+  2. Add to .env.qa and say 'ready' (I'll re-read it)
+  3. Generate account myself (disposable email — see W-2.7)
+  4. Skip this credential gate (only if you say so)"
+```
+
+> ⛔ **The agent NEVER chooses option 4 on its own.** Only the user can decide to skip. The agent must never autonomously click "Skip", "Set up later", "Maybe later", "Not now", or any bypass/dismiss button in the app UI.
+
+4. **After successful credential entry**:
+   - Screenshot the result page → verify success (no error message)
+   - Note the credential type and method in ui-inventory.md
+   - **Re-add the current URL and previously gated URLs back to the BFS queue** — pages behind this gate are now reachable
+   - Continue BFS from the new page
+   - Note other available methods as: `"Available but not tested: [list]"`
+
+5. **If credential entry fails** (wrong password, rejected key, error shown):
+   - Screenshot the error
+   - Tell user what happened and what the error says
+   - Ask for corrected credentials or skip
+   - **Do NOT stop crawling** — continue with other pages
+
+#### W-2.7: Self-Registration with Email Verification
+
+When user says **"generate yourself"** or **"create account yourself"**:
+
+1. **Generate disposable email** — use an accessible domain:
+```javascript
+const ACCESSIBLE_DOMAINS = ['yopmail.com', 'mailinator.com', 'guerrillamail.com'];
+const email = `qatest-${Date.now()}@yopmail.com`;
+const password = `QAtest${Date.now()}!`;
+```
+
+2. **Fill signup form** → screenshot → submit → screenshot result → READ
+
+3. **Check what happened after submit:**
+
+| Screenshot shows | Action |
+|-----------------|--------|
+| Dashboard / welcome page | Done — save credentials to `.env.qa` |
+| "Check your email" / "Enter verification code" | → **Email verification flow below** |
+| CAPTCHA / reCAPTCHA | Cannot automate — tell user, fall back |
+| "Invite only" / error | Cannot self-register — tell user, fall back |
+
+4. **Email verification flow** — if app requires email verification:
+
+```javascript
+const domain = email.split('@')[1];
+const ACCESSIBLE = ['yopmail.com', 'mailinator.com', 'guerrillamail.com', 'tempmail.plus'];
+
+if (ACCESSIBLE.includes(domain)) {
+  await page.goto('https://yopmail.com');
+  await page.locator('#login').fill(email.split('@')[0]);
+  await page.getByRole('button', { name: /check/i }).click();
+  await page.waitForTimeout(3000);
+
+  const inbox = page.frameLocator('#ifmail');
+  const emailBody = await inbox.locator('body').innerText();
+  const otp = emailBody.match(/\b\d{4,6}\b/)?.[0];
+  const verifyLink = emailBody.match(/https?:\/\/[^\s"<>]+verify[^\s"<>]*/i)?.[0];
+
+  if (verifyLink) {
+    await page.goto(verifyLink);
+  } else if (otp) {
+    await page.goto(process.env.QA_APP_URL);
+    await page.getByPlaceholder(/code|otp|verify/i).fill(otp);
+    await page.getByRole('button', { name: /verify|confirm|submit/i }).click();
+  }
+} else {
+  // Domain not accessible — ask user for OTP
+}
+```
+
+5. **After verification** → save credentials to `.env.qa` → save auth session → continue BFS
+
+**Domain accessibility rules:**
+| Domain | How to access | Notes |
+|--------|--------------|-------|
+| yopmail.com | `https://yopmail.com` → enter username → read iframe | Most reliable |
+| mailinator.com | `https://www.mailinator.com/v4/public/inboxes.jsp?to=[user]` | Some apps block it |
+| guerrillamail.com | `https://grr.la/mail/[user]` | Alternative if others blocked |
+| gmail.com, outlook.com, corporate | **NOT accessible** — ask user for OTP | Cannot automate |
+
+**If one domain is blocked by the app** (signup rejected), try the next accessible domain before falling back to asking the user.
+
+#### W-2.8: Record Results
+
+After BFS completes (queue empty or limit reached), write:
+
+**`qa/knowledgebase/ui-inventory.md`**:
+```markdown
+## Page Inventory — [AppName]
+
+**Total pages discovered: [N]** | **Public: [N]** | **Auth-gated: [N]** | **Duplicates skipped: [N]**
+
+| # | URL | Screenshot | Page Type | Auth | Key Elements |
+|---|-----|-----------|----------|------|-------------|
+| 1 | [actual URL] | page-[slug].png | [type from screenshot] | [Yes/No] | [elements seen] |
+```
+
+Page types are **derived from what you see in each screenshot** — not assumed. Common types: landing, auth, app/dashboard, content, settings, pricing, legal — but use whatever fits.
+
+**`qa/knowledgebase/nav-graph.md`** — built incrementally during crawl:
+```markdown
+| From | Link/CTA | To | Auth Gate |
+|------|---------|-----|-----------|
+| [source URL] | [link text or CTA label] | [target URL] | [none / requires auth / requires plan] |
+```
+
+Every outbound link on every visited page becomes a row. This is the data that powers flow creation.
+
+**`qa/crawl-state.json`** — already saved incrementally during the loop. Contains the full BFS state for resume.
+
+---
+
+## Fallback Execution — When BFS Stalls
+
+If you observe ANY of these stall signals, switch to the declared fallback (do not stop the run):
+
+| Stall signal | Action |
+|---|---|
+| Queue empties before MAX_PAGES with <10 pages found | Run `direct-URL fallback`: take all unvisited entries from `state.queue` + `hrefLinks`, `page.goto()` each with verification, screenshot. |
+| Same fingerprint hit on >50% of pages | Likely SPA with broken client routing — switch to `sitemap-spot-check` (read `/sitemap.xml`). |
+| Click-based nav fails on 5+ consecutive URLs | Drop click-nav entirely, use `page.goto()` only. Log in `qa/decisions.md`. |
+| MAX_PAGES reached with queue still large | Acceptable — this is by design. Record remaining queue size in `flow.md` Discovery Evidence. |
+
+**Every fallback execution appends to `qa/decisions.md`** following the format in `skills/_shared/fallback-discipline.md`.

@@ -1,5 +1,8 @@
 # Selector Strategies — QA Agent Web Skill
 
+> ⚠️ **These strategies are EXAMPLES AND PREFERRED SUGGESTIONS — adapt as needed.**
+> Document deviations in `qa/decisions.md`. If your preferred selector doesn't exist in the target app (e.g. no `data-testid`), fall back to the next best tier and log the substitution.
+
 Guide for choosing the right selectors to write maintainable, non-brittle Playwright tests.
 
 ---

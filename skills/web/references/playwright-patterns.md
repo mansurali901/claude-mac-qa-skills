@@ -1,5 +1,8 @@
 # Playwright Automation Patterns — QA Agent Web Skill
 
+> ⚠️ **These patterns are EXAMPLES AND PREFERRED SUGGESTIONS — adapt as needed.**
+> Document deviations in `qa/decisions.md` and always declare a fallback if a pattern doesn't fit the observed app.
+
 Reference guide for writing reliable Playwright tests within the QA Agent framework.
 
 ---

@@ -15,31 +15,45 @@ An autonomous QA engineer for **any native or web application**. Select a platfo
 
 ## How It Works
 
-The skill runs in two phases separated by a credentials gate.
+The skill runs in two phases separated by a credentials gate. Before Phase 1 kicks off, Claude **fingerprints the app** (5 questions → `qa/platform-fingerprint.md`) and **picks an exploration strategy** with a declared fallback, logged in `qa/decisions.md`. After exploration, a **role-confirmation gate** (web W-2.9) lists discovered roles + flow categories for user sign-off and collects per-role credentials so multi-role apps don't wedge on a single global pair. Set `QA_HEADLESS=false` in `.env.qa` to watch the browser while debugging.
 
 ```
-Phase 1 — Exploration (no credentials needed)
-─────────────────────────────────────────────
+Phase 0 — Setup & Fingerprint
+─────────────────────────────
 1. Select platform
 2. Choose framework (flow / feature / risk)
 3. Scaffold qa/ workspace
 4. Name the app / URL to test
 5. Read prior knowledge (PRD, Figma, code, or none)
-6. Launch app → screenshot every section
-7. Trace every public happy flow step-by-step with screenshots
-8. Write flow.md + save state checkpoint
+5.5. Platform fingerprint — 5 questions → qa/platform-fingerprint.md
+5.6. Decisions log bootstrap — qa/decisions.md (append-only)
+
+Phase 1 — Exploration (no credentials needed)
+─────────────────────────────────────────────
+6. Pick strategy from platform's strategies/ menu (web: bfs /
+   targeted-trace / sitemap-spot-check). Log choice + fallback.
+7. Copy strategy skeleton to qa/scripts/<strategy>.js, adapt to app
+8. Execute — every state change → screenshot → Read → decide
+9. If stall signal fires, fall back to declared alternative; continue
+10. Write flow.md per feature area + save state checkpoint
 
 Phase 1 Complete Gate → ask for credentials → wait
 
 Phase 2 — Full Coverage (credentials required)
 ──────────────────────────────────────────────
-9. Trace auth-gated flows with screenshots
-10. Generate all scenarios (happy + negative + edge + a11y + security)
-11. Write TC-NNN-*.md for every scenario
-12. Extract runnable test scripts + finalize workspace
+11. Trace auth-gated flows with screenshots
+12. Generate scenarios (applicable categories per fingerprint;
+    skipped categories justified + fallback declared)
+13. Write TC-NNN-*.md per scenario with "Why this scenario" grounding
+14. Extract runnable Playwright specs + finalize workspace
 ```
 
-Context is reset after each flow to prevent overflow — a state file (`qa/state.md`) acts as memory across resets.
+Context is reset after each flow. Three artefacts carry memory across resets:
+- `qa/platform-fingerprint.md` — write-once app classification
+- `qa/decisions.md` — append-only audit trail (strategy choices, fallbacks, script updates)
+- `qa/state.md` — per-checkpoint journey progress
+
+**The flow never breaks.** Every strategy, runtime script, and test step declares a fallback; a stall means switch, not stop.
 
 ---
 
@@ -83,8 +97,12 @@ Feature-based and risk-based variants replace `qa/flows/` with `qa/features/[nam
 ## Repository Structure
 
 ```
-SKILL.md                          ← Root orchestrator — platform selection + Steps 1–3
+SKILL.md                          ← Root orchestrator — platform selection + Steps 1–3.6
 skills/
+├── _shared/                      ← Cross-platform base layer
+│   ├── principles.md             ← How Claude thinks (screenshot protocol, selectors, sessions)
+│   ├── fingerprint-questions.md  ← 5 questions → qa/platform-fingerprint.md
+│   └── fallback-discipline.md    ← Non-negotiable: every strategy/script/step declares fallback
 ├── _registry/registry.json       ← Platform skill registry
 ├── macos/
 │   ├── SKILL.md                  ← macOS runbook — Steps 4–11 (explore script inlined)
@@ -96,11 +114,16 @@ skills/
 │       ├── macos-automation.md   ← AppleScript patterns + recipes
 │       └── test-patterns.md      ← Scenario patterns by UI element type
 ├── web/
-│   ├── SKILL.md                  ← Web runbook — Steps W-1–W-11 (inline Playwright exploration)
+│   ├── SKILL.md                  ← Web runbook — Playwright + strategy selection
+│   ├── strategies/               ← Exploration strategy menu (examples, not mandates)
+│   │   ├── README.md             ← Selection rubric: fingerprint Q3 → starting strategy
+│   │   ├── bfs.md                ← Default for dashboard / multi-page apps
+│   │   ├── targeted-trace.md     ← Onboarding / wizard / transactional flows
+│   │   └── sitemap-spot-check.md ← Content / CMS / marketing / docs
 │   ├── templates/
-│   │   ├── flow.md
-│   │   ├── scenarios.md
-│   │   ├── test-case.md
+│   │   ├── flow.md               ← Includes "Why this is a distinct flow" + Strategy row
+│   │   ├── scenarios.md          ← Applicable categories + Skipped (with reason)
+│   │   ├── test-case.md          ← Includes "Why this scenario" + setup fallback
 │   │   └── playwright.config.ts  ← Copied to qa/ at runtime
 │   └── references/
 │       ├── playwright-patterns.md

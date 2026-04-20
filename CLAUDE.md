@@ -33,15 +33,31 @@ Claude Code loads skills from committed SKILL.md files at session start. **Chang
 ### Skill Structure
 
 ```
-SKILL.md                          ← Root orchestrator
+SKILL.md                          ← Root orchestrator (platform-agnostic)
                                     Platform selection (Step 0)
                                     Workspace init (Steps 1–3)
+                                    Platform fingerprint (Step 3.5)
+                                    Decisions-log bootstrap (Step 3.6)
                                     Delegates Steps 4+ to platform skill
 
 skills/
+├── _shared/                      ← Cross-platform base layer
+│   ├── principles.md             ← How Claude thinks (screenshot protocol,
+│   │                               selector hierarchy, session limits,
+│   │                               runtime script evolution)
+│   ├── fingerprint-questions.md  ← 5 questions → qa/platform-fingerprint.md
+│   └── fallback-discipline.md    ← Non-negotiable fallback rule
 ├── _registry/registry.json       ← Registered platform skills
 ├── macos/SKILL.md                ← macOS Steps 4–11 (production)
-├── web/SKILL.md                  ← Web Steps W-1–W-12 (beta)
+├── web/
+│   ├── SKILL.md                  ← Web Steps W-1–W-12 (beta)
+│   ├── strategies/               ← Exploration strategy menu (examples,
+│   │   ├── README.md             ← not mandates — Claude picks per fingerprint)
+│   │   ├── bfs.md                ← Default for dashboard/multi-page
+│   │   ├── targeted-trace.md     ← Onboarding / wizard flows
+│   │   └── sitemap-spot-check.md ← Content / CMS / docs
+│   ├── templates/                ← flow.md, scenarios.md, test-case.md
+│   └── references/               ← Playwright + selector patterns
 ├── ios/SKILL.md                  ← Stub
 ├── android/SKILL.md              ← Stub
 ├── windows/SKILL.md              ← Stub
@@ -50,11 +66,34 @@ skills/
 
 Root `SKILL.md` always asks for platform FIRST — before any bash commands or workspace checks. This is enforced by a `## DO THIS NOW` block at the top of the file.
 
-After platform selection, the root skill handles Steps 0–3 (mode detection, workspace init, app selection, prior knowledge), then delegates all automation to the selected `skills/[platform]/SKILL.md`.
+After platform selection, the root skill handles Steps 0–3 (mode detection, workspace init, app selection, prior knowledge), then **Step 3.5** (platform fingerprint → `qa/platform-fingerprint.md`) and **Step 3.6** (decisions log bootstrap → `qa/decisions.md`), then delegates all automation to the selected `skills/[platform]/SKILL.md`.
+
+### Fingerprint → Strategy → Fallback pattern
+
+Every run answers 5 questions about the app (`skills/_shared/fingerprint-questions.md`): app category, auth model, surface complexity, audience, chosen exploration strategy + rationale. The fingerprint file is **write-once** — future resumes read it without regenerating. Platform skills use it to pick from a menu of strategies (e.g. `skills/web/strategies/`) and log the choice + declared fallback in `qa/decisions.md`. If the chosen strategy stalls, the declared fallback kicks in — the flow never breaks.
 
 ### Platform Sub-Skills
 
 Each platform SKILL.md is self-contained — automation code is inlined as instructions. The web skill depends on two committed utility scripts (`scripts/qa-screenshot.js` for atomic screenshot registration, `scripts/allure/generate-report.js` for standalone HTML report generation) that contain complex reusable logic. Platform skills receive context from the root skill via the workspace config and state file.
+
+### Preflight → Role gate → Engagement protocol
+
+After the fingerprint, root **Step 3.7 Preflight** (delegated to platform; web is **W-1.5**) verifies toolchain + env + config without throwing. Each missing item becomes an `AskUserQuestion` with four options (auto-install / provide value / fix manually / skip).
+
+After exploration, web **Step W-2.9 Role & Flow Inventory Confirmation Gate** synthesizes roles + flow categories from the nav graph, presents them in one batched `AskUserQuestion`, and collects per-role credentials (`QA_<ROLE>_EMAIL` / `QA_<ROLE>_PASSWORD`). Each role's session is cached as `storageState` at `qa/.auth/<role>.json` and reused per-flow.
+
+**Engagement protocol** (`skills/_shared/engagement-protocol.md`): no runtime script may `throw` or `process.exit(1)` on a blocker — they write `qa/pending-question.md`, exit cleanly, and the agent re-engages the user.
+
+### Outcome classifier + Login engagement
+
+Two helpers (specs in `skills/web/helpers/`, runtime copies in `qa/scripts/`) replace the legacy heuristics:
+
+- **outcome-classifier** — returns labeled outcomes (`navigated`, `dom-updated`, `error-surfaced`, `auth-rejected-server`, `form-reset-silent`, `auth-success`, `modal-opened`, `network-timeout`, `no-change`) instead of a `stateChanged` boolean. Only `no-change` counts as a stall.
+- **login-engage** — network-first login: arms `page.waitForResponse` for the auth POST BEFORE clicking submit, captures status + body + cookies, distinguishes silent form-reset from server rejection (the HomaCare failure mode), engages the user with concrete evidence rather than reporting "blocker".
+
+**Headless toggle**: every Chromium launch uses `chromium.launch({ headless: process.env.QA_HEADLESS !== 'false' })`. Set `QA_HEADLESS=false` in `.env.qa` to watch the browser.
+
+**Token discipline**: gated screenshot Reads — only inline-Read on `error-surfaced` / `auth-rejected-server` / `form-reset-silent` / `modal-opened` / `network-timeout` / terminal labels, plus ≤ 3 representative shots per flow boundary. `qa/classifier-log.jsonl` (≤ 120 bytes per entry) replaces re-parsing flow.md tables on resume. `storageState` per role prevents re-login per flow.
 
 ---
 
@@ -66,7 +105,7 @@ Exploration scripts are **inlined in each platform's SKILL.md** — not standalo
 The explore script is inlined in `skills/macos/SKILL.md` (Step 5). At runtime the agent writes it to `qa/scripts/explore.py` and runs it. No pip dependencies — uses stdlib only (`subprocess`, `json`, `argparse`, `plistlib`).
 
 ### Web
-Uses **inline Playwright code blocks** in `skills/web/SKILL.md` (Steps W-2, W-3). The agent takes screenshots, reads them, and decides the next action — no separate explore script. Each step adapts to the specific app's UI.
+Playwright is the web tool. **Which exploration strategy** runs is picked per-app based on the fingerprint — see `skills/web/strategies/` for the menu (bfs, targeted-trace, sitemap-spot-check). The chosen strategy's code skeleton is copied into `qa/scripts/<strategy>.js` at runtime, adapted to the observed app, and dispatched through `qa/scripts/explore.js`. Every script carries a three-line header (Why / Strategy / Fallback); every update requires a matching `qa/decisions.md` entry. The agent takes screenshots, reads them, and decides the next action.
 
 ---
 
@@ -162,15 +201,17 @@ qa/
 
 ## Session State
 
-`qa/state.md` is the memory across context resets. It contains:
-- App under test (name, path, auth method, core product, quirks)
-- Which E2E journeys are completed (with screenshot counts and key observations)
-- Which journeys are pending (with priority and auth requirement)
-- Journey coverage: [N traced] / [N total] ([%])
-- Exact resume command for the next journey
-- Credentials status
+Three session artefacts carry context across resets. All three are cheap to re-read — none are regenerated:
 
-**State file**: `qa/state.md` — one global state file shared across all platforms. Testing a different app overwrites it with the new app's context.
+| File | Lifecycle | Purpose |
+|------|-----------|---------|
+| `qa/platform-fingerprint.md` | **Write-once** (Step 3.5) | 5-question app classification + chosen strategy + fallback. Never rewritten. |
+| `qa/decisions.md` | **Append-only** | Audit trail: strategy choices, deviations, runtime script updates, fallback triggers. On resume, tail last N entries. |
+| `qa/state.md` | **Updated per checkpoint** | App under test, journeys done/pending, coverage %, resume command. One global file across all platforms. |
+
+Strategy-specific resume artefacts (e.g. `qa/crawl-state.json` for BFS, `qa/trace-state.json` for targeted-trace) are owned by the platform skill and auto-saved after every page so mid-strategy resume is free.
+
+`qa/scripts/` is Claude-owned. Every script there traces to a strategy file; every update requires a `qa/decisions.md` entry.
 
 ---
 

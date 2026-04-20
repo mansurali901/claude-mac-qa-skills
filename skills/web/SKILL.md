@@ -98,11 +98,12 @@ const dotenvPath = path.resolve(process.cwd(), '.env.qa');
 if (fs.existsSync(dotenvPath)) {
   require('dotenv').config({ path: dotenvPath });
 } else {
-  throw new Error('.env.qa not found. Copy .env.example to .env.qa and fill in your values.');
+  console.warn('[qa] .env.qa not found. Preflight (Step W-1.5) will engage the user to create it.');
 }
 if (!process.env.QA_APP_URL) {
-  throw new Error('QA_APP_URL is not set in .env.qa');
+  console.warn('[qa] QA_APP_URL is not set. Preflight (Step W-1.5) will prompt for it.');
 }
+const HEADLESS = process.env.QA_HEADLESS !== 'false';
 
 const CI = !!process.env.CI;
 const REPO_ROOT = process.cwd();
@@ -124,6 +125,7 @@ export default defineConfig({
   ],
   use: {
     baseURL:           process.env.QA_APP_URL,
+    headless:          HEADLESS,
     trace:             'on-first-retry',
     screenshot:        'only-on-failure',
     video:             'on-first-retry',
@@ -150,718 +152,201 @@ This reads all config from `.env.qa` dynamically — no hardcoded URLs or creden
 
 ---
 
-### Step W-2: BFS Deep Crawl — Discover Every Page
+### Step W-1.5: Preflight — Verify & Auto-Install with User Consent
 
-**This is the most important step.** Use Breadth-First Search to discover every reachable page in the application. Do NOT stop at 1-hop from the homepage.
+> **Engagement protocol** (`skills/_shared/engagement-protocol.md`): preflight MUST NOT throw or `exit 1`. For each missing item, surface a four-option `AskUserQuestion`: (a) auto-install / auto-create, (b) provide value now, (c) fix manually then say "continue", (d) skip the affected feature.
 
-**Key fixes applied in this section:**
-- Every navigation is **verified** — screenshot is named by the ACTUAL page, not the intended URL
-- A **configurable minimum wait** runs before every screenshot (`QA_PAGE_WAIT_MS`)
-- BFS stops at **`QA_MAX_PAGES`** and **`QA_MAX_DEPTH`** to prevent context exhaustion
-- BFS state is **saved to disk** (`qa/crawl-state.json`) after every page — survives context resets
-- Screenshots are taken **AFTER** hidden content is revealed, not before
-- Buttons are clicked through a **safe whitelist** — dangerous actions are never triggered
-- **Content fingerprinting** flags duplicate pages that have different URLs but identical content
+Run these checks IN ORDER, branch on failure:
 
-#### W-2.1: Launch Browser, Read Config, Initialize State
+```bash
+# 1. node_modules with @playwright/test
+[ -d node_modules/@playwright/test ] && echo "ok: playwright installed" \
+  || echo "MISSING: @playwright/test — offer 'npm install'"
 
-```javascript
-const fs = require('fs');
-const path = require('path');
-const { chromium } = require('@playwright/test');
-require('dotenv').config({ path: '.env.qa' });
-const { capture } = require('../scripts/qa-screenshot');
+# 2. Chromium browser binary
+npx --yes playwright install --dry-run chromium 2>&1 | grep -q "is already installed" \
+  && echo "ok: chromium installed" \
+  || echo "MISSING: chromium — offer 'npx playwright install chromium'"
 
-// ═══ CONFIG — from .env.qa with safe defaults ═══
-const CONFIG = {
-  pageWaitMs:  parseInt(process.env.QA_PAGE_WAIT_MS || '2000'),
-  maxPages:    parseInt(process.env.QA_MAX_PAGES || '50'),
-  maxDepth:    parseInt(process.env.QA_MAX_DEPTH || '5'),
-  navTimeout:  parseInt(process.env.QA_NAV_TIMEOUT || '15000'),
-};
+# 3. .env.qa exists
+[ -f .env.qa ] && echo "ok: .env.qa present" \
+  || echo "MISSING: .env.qa — offer to copy .env.example and prompt for values"
 
-const CRAWL_STATE_FILE = 'qa/crawl-state.json';
+# 4. QA_APP_URL set
+( set -a; [ -f .env.qa ] && . ./.env.qa; set +a; [ -n "$QA_APP_URL" ] ) \
+  && echo "ok: QA_APP_URL set" \
+  || echo "MISSING: QA_APP_URL — prompt user for the URL to test"
 
-// Pre-crawl: load ALL credentials from .env.qa into a map
-const credentials = {
-  email:    process.env.QA_TEST_EMAIL || '',
-  password: process.env.QA_TEST_PASSWORD || '',
-  apiKey:   process.env.QA_LLM_API_KEY || '',
-  provider: process.env.QA_LLM_PROVIDER || '',
-  secondaryEmail:    process.env.QA_SECONDARY_EMAIL || '',
-  secondaryPassword: process.env.QA_SECONDARY_PASSWORD || '',
-};
-const hasCredentials = !!(credentials.email || credentials.apiKey);
-
-const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage();
-
-// ═══ BFS STATE — persisted to disk after every page ═══
-// If crawl-state.json exists from a previous run, resume from it.
-let state;
-if (fs.existsSync(CRAWL_STATE_FILE)) {
-  const saved = JSON.parse(fs.readFileSync(CRAWL_STATE_FILE, 'utf8'));
-  state = {
-    visited: new Set(saved.visited),
-    queue: saved.queue,               // Array of { url, depth }
-    pages: saved.pages,               // Discovered page manifest
-    fingerprints: new Map(Object.entries(saved.fingerprints || {})),
-    duplicates: saved.duplicates || [],
-    pageCount: saved.pageCount || 0,
-    isAuthenticated: saved.isAuthenticated || false,
-  };
-  console.log(`Resuming BFS: ${state.visited.size} visited, ${state.queue.length} queued`);
-} else {
-  state = {
-    visited: new Set(),
-    queue: [{ url: process.env.QA_APP_URL, depth: 0 }],
-    pages: [],
-    fingerprints: new Map(),
-    duplicates: [],
-    pageCount: 0,
-    isAuthenticated: false,
-  };
-}
-
-function saveCrawlState() {
-  fs.writeFileSync(CRAWL_STATE_FILE, JSON.stringify({
-    visited: [...state.visited],
-    queue: state.queue,
-    pages: state.pages,
-    fingerprints: Object.fromEntries(state.fingerprints),
-    duplicates: state.duplicates,
-    pageCount: state.pageCount,
-    isAuthenticated: state.isAuthenticated,
-    savedAt: new Date().toISOString(),
-  }, null, 2));
-}
+# 5. Default-role creds (member)
+( set -a; [ -f .env.qa ] && . ./.env.qa; set +a; [ -n "$QA_TEST_EMAIL" ] && [ -n "$QA_TEST_PASSWORD" ] ) \
+  && echo "ok: default creds present" \
+  || echo "WARN: no QA_TEST_EMAIL/PASSWORD — non-blocking; W-2.9 role gate will reconcile"
 ```
 
-#### W-2.2: Utility Functions — Wait, Verify, Normalize
-
-These functions are used throughout the BFS loop. Define them before the loop starts.
-
-**URL Normalization** — prevents visiting the same page under different URL forms:
-
-```javascript
-function normalizeUrl(raw) {
-  try {
-    const u = new URL(raw);
-    // Strip: trailing slash, hash, tracking params
-    let normalized = `${u.protocol}//${u.hostname}${u.pathname}`
-      .replace(/\/+$/, '');
-    // Keep meaningful query params, strip tracking
-    const tracking = new Set([
-      'utm_source', 'utm_medium', 'utm_campaign', 'utm_content',
-      'ref', 'fbclid', 'gclid', '_ga',
-    ]);
-    const params = new URLSearchParams(u.search);
-    const kept = [];
-    for (const [k, v] of params) {
-      if (!tracking.has(k)) kept.push(`${k}=${v}`);
-    }
-    if (kept.length) normalized += `?${kept.sort().join('&')}`;
-    return normalized.toLowerCase();
-  } catch {
-    return raw;
-  }
-}
-```
-
-**Page Wait** — configurable minimum + load state. Simple and reliable:
-
-```javascript
-async function waitForPageReady(page) {
-  // 1. Wait for DOM to be ready — non-negotiable baseline
-  await page.waitForLoadState('domcontentloaded');
-
-  // 2. Configurable minimum wait — gives JS frameworks time to hydrate.
-  //    User tunes this via QA_PAGE_WAIT_MS in .env.qa.
-  //    Default 2000ms works for most apps. Slow apps: set 3000-4000.
-  await page.waitForTimeout(CONFIG.pageWaitMs);
-}
-```
-
-> **Why a simple minimum wait instead of DOM mutation observers or spinner detection?**
-> MutationObservers never settle on apps with animations or live data. Spinner detection by class name is fragile. A configurable minimum wait is predictable, works on every app, and the user can tune it. If 2000ms isn't enough, set `QA_PAGE_WAIT_MS=3000` in `.env.qa`.
-
-**Page Verification** — confirms the agent arrived at the intended page:
-
-```javascript
-async function verifyNavigation(page, intendedUrl) {
-  const actualUrl = page.url();
-  const intendedPath = new URL(intendedUrl).pathname.replace(/\/+$/, '');
-  const actualPath = new URL(actualUrl).pathname.replace(/\/+$/, '');
-  const redirected = intendedPath !== actualPath;
-
-  // Content fingerprint — detects same page at different URLs
-  const fingerprint = await page.evaluate(() => {
-    const h1 = (document.querySelector('h1') || {}).textContent || '';
-    const title = document.title || '';
-    return `${title.trim()}|||${h1.trim()}`.toLowerCase();
-  });
-
-  // Use ACTUAL path for the screenshot slug — not the intended one
-  const slug = actualPath.split('/').filter(Boolean).pop() || 'homepage';
-
-  return { intendedUrl, actualUrl, redirected, fingerprint, slug };
-}
-```
-
-**Error Page Detection** — broader than just "404 + not found":
-
-```javascript
-async function isErrorPage(page) {
-  return page.evaluate(() => {
-    const text = document.body.innerText.toLowerCase();
-    const h1 = (document.querySelector('h1') || {}).textContent || '';
-    const h1Lower = h1.toLowerCase();
-
-    // Explicit 404
-    if (/\b404\b/.test(text) && /not found|doesn.t exist/i.test(text))
-      return '404';
-    // "Page not found" without the number
-    if (/page not found|this page doesn.t exist|nothing here/i.test(h1Lower))
-      return 'not-found';
-    // Generic error with short content (not a feature page)
-    if (/something went wrong|unexpected error|oops/i.test(h1Lower) && text.length < 500)
-      return 'error';
-    // Empty SPA route — shell loaded but no meaningful content
-    const main = document.querySelector('main, [role="main"], #app, #root');
-    if (main && main.innerText.trim().length < 20
-        && !main.querySelector('input, button, form'))
-      return 'empty-route';
-
-    return null;
-  });
-}
-```
+For each MISSING line, call `AskUserQuestion` once with the four options. Auto-install only on explicit consent. Append every preflight outcome to `qa/decisions.md` as a single dated entry. **Per-role credentials are deferred to Step W-2.9.**
 
 ---
 
-#### W-2.3: BFS Main Loop — Navigate, Verify, Interact, Screenshot
+### Step W-2: Exploration Strategy Selection — Pick, Log, Execute, Fallback
 
-**Loop order is critical.** Each step depends on the previous one completing correctly:
+> ⚠️ **Strategies under `skills/web/strategies/` are EXAMPLES AND PREFERRED SUGGESTIONS — NOT MANDATES.**
+> You may deviate based on the observed app character, but you MUST:
+> 1. Log the deviation in `qa/decisions.md` with rationale.
+> 2. Declare a fallback. If the chosen approach stalls, fall back and continue — never break the flow.
 
-```
-For each URL in the queue:
-  1. LIMIT CHECK — skip if max pages or max depth exceeded
-  2. NAVIGATE — click-based (SPA-safe), with fallbacks
-  3. WAIT — configurable minimum wait (QA_PAGE_WAIT_MS)
-  4. VERIFY — compare actual URL to intended URL
-  5. DEDUP — content fingerprint check (same page, different URL?)
-  6. ERROR CHECK — 404, empty route, generic error page
-  7. CREDENTIAL CHECK — detect input fields, auto-fill from .env.qa
-  8. REVEAL HIDDEN CONTENT — tabs, dropdowns, scroll (W-2.4)
-  9. SCREENSHOT — after everything is visible and settled
-  10. READ — visual analysis via Read tool
-  11. COLLECT LINKS — href scan + safe button discovery (W-2.5)
-  12. SAVE STATE — write crawl-state.json to disk
-```
+Playwright remains the web tool. Autonomy is about **which exploration strategy** to apply, not which tool.
 
-> **Why this order matters**: The old loop took screenshots at step 5 (before revealing hidden content) and named them by intended URL (before verification). This caused the hallucination bug — same screen, different filenames. The new order screenshots AFTER verification, AFTER interaction, using the ACTUAL URL for naming.
+#### W-2.1 — Read the fingerprint
 
-```javascript
-// ═══ BEFORE THE LOOP — create seed-crawl flow directory ═══
-// capture() needs a flow directory to register screenshots.
-// Create it before the loop starts so capture() doesn't throw.
-const seedFlowDir = 'qa/flows/seed-crawl';
-fs.mkdirSync(path.join(seedFlowDir, 'test-cases'), { recursive: true });
-if (!fs.existsSync(path.join(seedFlowDir, 'flow.md'))) {
-  fs.writeFileSync(path.join(seedFlowDir, 'flow.md'),
-    '# Seed Crawl — BFS Discovery\n\n' +
-    '## Discovery Evidence\n\n' +
-    '| Step | Page/Screen | Action | Screenshot | Observed |\n' +
-    '|------|------------|--------|-----------|---------|');
-}
+Read `qa/platform-fingerprint.md` (written in root SKILL.md Step 3.5). The Q3 answer (app category) and Q4 answer (audience) drive strategy selection.
 
-while (state.queue.length > 0) {
-  const { url, depth } = state.queue.shift();
-  const normalized = normalizeUrl(url);
+#### W-2.2 — Consult the selection rubric
 
-  // ── 1. LIMIT CHECKS ──
-  if (state.visited.has(normalized)) continue;
+Open [skills/web/strategies/README.md](strategies/README.md) and map Q3 → starting strategy:
 
-  if (state.pageCount >= CONFIG.maxPages) {
-    console.log(`⚠ MAX PAGES (${CONFIG.maxPages}) reached. Stopping BFS.`);
-    console.log(`  ${state.queue.length} URLs remain in queue — increase QA_MAX_PAGES to crawl more.`);
-    break;
-  }
-  if (depth > CONFIG.maxDepth) {
-    console.log(`⚠ Skipping ${url} — depth ${depth} exceeds QA_MAX_DEPTH (${CONFIG.maxDepth})`);
-    continue;
-  }
+| Fingerprint Q3 | Starting strategy | Declared fallback |
+|---|---|---|
+| Dashboard / multi-page / mixed | [bfs.md](strategies/bfs.md) (default) | Direct-URL probing → sitemap-spot-check |
+| Onboarding-heavy / Transactional / Wizard | [targeted-trace.md](strategies/targeted-trace.md) | Skip + continue → BFS after 3 consecutive stalls |
+| Content / CMS / Marketing / Docs | [sitemap-spot-check.md](strategies/sitemap-spot-check.md) | BFS with `QA_MAX_DEPTH=2` |
+| Something else | Custom strategy — document rationale + fallback in `qa/decisions.md` |  |
 
-  state.visited.add(normalized);
+#### W-2.3 — Log the choice
 
-  // ── 2. NAVIGATE — click-based, SPA-safe ──
-  const intendedPath = new URL(url).pathname;
+Append to `qa/decisions.md`:
 
-  if (state.pageCount === 0) {
-    // First page: load SPA shell via direct navigation
-    await page.goto(process.env.QA_APP_URL, {
-      waitUntil: 'domcontentloaded',
-      timeout: CONFIG.navTimeout,
-    });
-  } else {
-    let navigated = false;
-
-    // Try 1: Click <a> or [data-href] matching this path
-    for (const sel of [
-      `a[href="${intendedPath}"], a[href="${url}"], a[href$="${intendedPath}"]`,
-      `[data-href="${intendedPath}"], [data-to="${intendedPath}"]`,
-    ]) {
-      const lnk = page.locator(sel).first();
-      if (await lnk.count() > 0 && await lnk.isVisible().catch(() => false)) {
-        await lnk.click();
-        navigated = true;
-        break;
-      }
-    }
-
-    // Try 2: Text match — scoped to nav/header only (avoids footer duplicates)
-    if (!navigated) {
-      const slug = intendedPath.split('/').filter(Boolean).pop() || '';
-      if (slug) {
-        const navLink = page.locator('nav, header').first()
-          .locator('a, button, [role="link"], [role="menuitem"]')
-          .filter({ hasText: new RegExp(slug.replace(/-/g, '.'), 'i') }).first();
-        if (await navLink.count() > 0) {
-          await navLink.click();
-          navigated = true;
-        }
-      }
-    }
-
-    // Try 3: Reveal dropdown menus, then click
-    if (!navigated) {
-      for (const trigger of await page.locator(
-        'nav button[aria-haspopup], nav [aria-expanded], header button[aria-haspopup], details > summary'
-      ).all()) {
-        await trigger.click().catch(() => {});
-        await page.waitForTimeout(500);
-        const menuLink = page.locator(`a[href="${intendedPath}"], a[href$="${intendedPath}"]`).first();
-        if (await menuLink.count() > 0) {
-          await menuLink.click();
-          navigated = true;
-          break;
-        }
-        await page.keyboard.press('Escape');
-      }
-    }
-
-    // Last resort: direct navigation (may soft-404 on SPAs — caught by error check)
-    if (!navigated) {
-      await page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: CONFIG.navTimeout,
-      }).catch(() => {
-        console.log(`⚠ Navigation timeout for ${url}`);
-      });
-    }
-  }
-
-  // ── 3. WAIT — configurable minimum + DOM ready ──
-  await waitForPageReady(page);
-
-  // ── 4. VERIFY — did we actually arrive at the intended page? ──
-  const nav = await verifyNavigation(page, url);
-
-  if (nav.redirected) {
-    console.log(`↪ Redirect: ${url} → ${nav.actualUrl}`);
-    // Mark the actual URL as visited too — prevents re-visiting the redirect target
-    state.visited.add(normalizeUrl(nav.actualUrl));
-  }
-
-  // ── 5. DEDUP — content fingerprint check ──
-  if (state.fingerprints.has(nav.fingerprint)) {
-    const original = state.fingerprints.get(nav.fingerprint);
-    console.log(`⚠ DUPLICATE: ${nav.actualUrl} has same content as ${original} — skipping`);
-    state.duplicates.push({ url: nav.actualUrl, duplicateOf: original });
-    saveCrawlState();
-    continue;
-  }
-  state.fingerprints.set(nav.fingerprint, nav.actualUrl);
-
-  // ── 6. ERROR CHECK — broader than just "404 + not found" ──
-  const errorType = await isErrorPage(page);
-  if (errorType) {
-    console.log(`⚠ ${errorType} detected at ${nav.actualUrl} — skipping screenshot`);
-    saveCrawlState();
-    continue;
-  }
-
-  // ── 7. CREDENTIAL CHECK — detect fields, auto-fill from .env.qa ──
-  const credFields = await page.evaluate(() => {
-    const fields = [];
-    document.querySelectorAll('input[type="password"]').forEach(el =>
-      fields.push({ type: 'password', label: (el.labels?.[0]?.textContent || el.placeholder || 'password').trim() })
-    );
-    document.querySelectorAll('input[type="email"], input[name*="email" i], input[placeholder*="email" i]').forEach(el =>
-      fields.push({ type: 'email', label: (el.placeholder || el.name || 'email').trim() })
-    );
-    document.querySelectorAll(
-      'input[placeholder*="key" i], input[placeholder*="token" i], input[placeholder*="api" i], ' +
-      'input[name*="key" i], input[name*="api" i], input[placeholder*="secret" i]'
-    ).forEach(el =>
-      fields.push({ type: 'api_key', label: (el.placeholder || el.name || 'api_key').trim() })
-    );
-    document.querySelectorAll('label').forEach(lbl => {
-      if (/key|token|secret|api/i.test(lbl.textContent)) {
-        const input = lbl.querySelector('input') || document.getElementById(lbl.htmlFor);
-        if (input) fields.push({ type: 'api_key', label: lbl.textContent.trim() });
-      }
-    });
-    document.querySelectorAll('input[name*="card" i], input[placeholder*="card" i], input[autocomplete*="cc-"]').forEach(el =>
-      fields.push({ type: 'payment', label: (el.placeholder || el.name || 'card').trim() })
-    );
-    return fields;
-  });
-
-  if (credFields.length > 0) {
-    // → Handle via Credential Gate Protocol (W-2.6)
-    // Auto-fill from .env.qa if available. Ask user if not.
-    // After successful auth, re-add gated URLs to queue.
-  }
-
-  // ── 8. REVEAL HIDDEN CONTENT — tabs, dropdowns, scroll (W-2.4) ──
-  // This runs BEFORE the screenshot so the capture shows the full page state.
-  // See W-2.4 section below for the full interaction code.
-
-  // ── 9. SCREENSHOT — AFTER verification, interaction, and reveal ──
-  state.pageCount++;
-  // Prefix with zero-padded counter to guarantee unique filenames.
-  // Without this, /user/settings and /admin/settings both produce page-settings.png.
-  const screenshotFile = `page-${String(state.pageCount).padStart(2, '0')}-${nav.slug}.png`;
-
-  await capture(page, {
-    flow: 'seed-crawl',
-    step: state.pageCount,
-    action: `Visit ${nav.actualUrl}`,
-    observed: '(pending visual analysis)',
-    page: nav.slug,
-    file: screenshotFile,
-  });
-
-  // ── 10. READ — visual analysis via Read tool ──
-  // READ the screenshot with the Read tool now.
-  // Write the actual observation back to the discovery evidence table.
-
-  // ── 11. COLLECT LINKS — href scan + safe button discovery (W-2.5) ──
-  const hrefLinks = await page.evaluate(() =>
-    [...document.querySelectorAll('a[href], [data-href], [data-to]')]
-      .map(el => el.href || el.dataset?.href || el.dataset?.to || '')
-      .filter(href => href && href.startsWith(window.location.origin))
-      .map(href => href.split('#')[0].split('?')[0])
-      .filter((v, i, a) => a.indexOf(v) === i)
-  );
-  for (const link of hrefLinks) {
-    if (!state.visited.has(normalizeUrl(link))) {
-      state.queue.push({ url: link, depth: depth + 1 });
-    }
-  }
-
-  // Safe button discovery — see W-2.5 for the whitelist logic
-  // Runs AFTER screenshot so button clicks don't corrupt the captured state.
-
-  // ── 12. RECORD — update page manifest and save to disk ──
-  state.pages.push({
-    url: nav.actualUrl,
-    intendedUrl: url,
-    redirected: nav.redirected,
-    screenshot: screenshotFile,
-    depth,
-    credFields: credFields.length > 0 ? credFields : undefined,
-    timestamp: new Date().toISOString(),
-  });
-
-  saveCrawlState();
-}
-
-// BFS complete
-console.log(`BFS done: ${state.pageCount} pages visited, ${state.duplicates.length} duplicates skipped`);
-saveCrawlState();
-```
-
----
-
-#### W-2.4: Reveal Hidden Content — Runs BEFORE Screenshot
-
-On each page, AFTER wait + verification but BEFORE screenshot, reveal interactive content so the screenshot captures the full page state.
-
-```javascript
-// 1. Tabs — click each to reveal content
-const tabs = await page.locator('[role=tab], [data-tab], button[aria-selected]').all();
-for (const tab of tabs) {
-  await tab.click().catch(() => {});
-  await page.waitForTimeout(500);
-}
-
-// 2. Dropdowns/menus — open to discover links, then close
-const toggles = await page.locator(
-  '[aria-haspopup], details:not([open]) > summary'
-).all();
-for (const t of toggles) {
-  await t.click().catch(() => {});
-  await page.waitForTimeout(500);
-  // Collect links from the revealed content here
-  await page.keyboard.press('Escape');
-  await page.waitForTimeout(200);
-}
-
-// 3. Scroll — trigger lazy-loaded content
-await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-await page.waitForTimeout(CONFIG.pageWaitMs);  // Wait again after scroll
-await page.evaluate(() => window.scrollTo(0, 0));  // Scroll back to top for screenshot
-```
-
-> **Adapt to what you SEE.** After each screenshot READ, if you notice interactive elements not covered above (accordions, carousels, slide-out panels, mega-menus), write a custom click sequence for them.
-
----
-
-#### W-2.5: Safe Button Discovery — Whitelist, Not Blacklist
-
-After the screenshot is taken, discover routes behind non-anchor buttons. **Only click buttons that look like navigation.** Never click destructive actions.
-
-```javascript
-// Labels that are NEVER safe to click during discovery
-const DANGEROUS = /delete|remove|cancel|log\s?out|sign\s?out|reset|clear|
-  unsubscribe|deactivate|close.account|revoke|disconnect|destroy|
-  disable|block|report|archive/i;
-
-// Labels that are likely navigation (safe to click)
-const SAFE_NAV = /view|open|go.to|see.all|see.more|more|details|explore|
-  learn|visit|show|browse|discover|manage|dashboard|settings|profile|
-  upgrade|pricing|docs|help|support|about/i;
-
-// Only scan nav and header — never click random buttons in main content
-const navButtons = await page.locator('nav, header').first()
-  .locator('button, [role="link"]:not(a), [role="menuitem"]:not(a)').all();
-
-const urlBeforeDiscovery = page.url();
-
-for (const el of navButtons) {
-  const text = (await el.textContent().catch(() => '')).trim();
-  if (!text || text.length > 50) continue;
-
-  // Skip dangerous labels
-  if (DANGEROUS.test(text)) {
-    console.log(`SKIP dangerous: "${text}"`);
-    continue;
-  }
-
-  // Only click if it looks like navigation
-  if (!SAFE_NAV.test(text)) {
-    console.log(`SKIP non-nav: "${text}"`);
-    continue;
-  }
-
-  await el.click().catch(() => {});
-  await page.waitForTimeout(CONFIG.pageWaitMs);
-
-  const urlAfterClick = page.url();
-  if (urlAfterClick !== urlBeforeDiscovery
-      && !state.visited.has(normalizeUrl(urlAfterClick))) {
-    state.queue.push({ url: urlAfterClick, depth: depth + 1 });
-    // Navigate back to continue discovery
-    await page.goBack().catch(() => {});
-    await page.waitForTimeout(CONFIG.pageWaitMs);
-  } else {
-    // No navigation — dismiss any popup
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(300);
-  }
-}
-```
-
----
-
-#### W-2.6: Credential Gate Protocol — Proactive Detection
-
-**Triggered by**: The credential detection in W-2.3 step 7 finding ANY sensitive input field on a page — not just login/signup. This includes API key entry, payment forms, onboarding flows, token inputs, admin gates, SSO screens, etc.
-
-**When credential fields are detected on a page, do NOT stop crawling.** Handle inline.
-
-> ⛔ **HARD RULE**: If `.env.qa` has a value for a detected field, **you MUST auto-fill it**. You must NEVER click "Skip", "Set up later", "Maybe later", "Not now", or any bypass/dismiss button when the matching credential exists in `.env.qa`. The user provided those values specifically so you would use them. Skipping when values are available is a bug.
-
-1. **Identify what's needed** from the `credFields` detected in the loop:
-
-| Detected field type | `.env.qa` variable | Auto-fill? |
-|--------------------|--------------------|-----------|
-| `email` | `QA_TEST_EMAIL` | **MANDATORY** if set |
-| `password` | `QA_TEST_PASSWORD` | **MANDATORY** if set |
-| `api_key` | `QA_LLM_API_KEY` | **MANDATORY** if set |
-| Provider dropdown | `QA_LLM_PROVIDER` | **MANDATORY** if set — select matching option |
-| Model dropdown | Derive from provider or use default | Select if available |
-| `payment` (card) | Test card `4242 4242 4242 4242` | **MANDATORY** if Stripe detected |
-| Unknown / custom | — | Ask user |
-
-2. **If matching `.env.qa` values exist** → auto-fill is **MANDATORY**, not optional:
-
-```javascript
-// ═══ MANDATORY AUTO-FILL — never skip when values exist ═══
-
-// Provider dropdown (if present) — MUST be filled BEFORE API key
-if (credFields.some(f => f.type === 'api_key') && credentials.provider) {
-  const providerDropdown = page.locator('select, [role="listbox"], [role="combobox"]')
-    .filter({ hasText: /provider|model|select/i }).first();
-  if (await providerDropdown.count() > 0) {
-    await providerDropdown.click();
-    await page.waitForTimeout(500);
-    await page.getByRole('option', { name: new RegExp(credentials.provider, 'i') }).click()
-      .catch(() => page.locator(`[data-value*="${credentials.provider}" i]`).first().click())
-      .catch(() => {});
-    await page.waitForTimeout(1000);
-  }
-}
-
-// Email
-if (credFields.some(f => f.type === 'email') && credentials.email) {
-  await page.getByLabel(/email/i).fill(credentials.email);
-}
-
-// Password
-if (credFields.some(f => f.type === 'password') && credentials.password) {
-  await page.getByLabel(/password/i).fill(credentials.password);
-}
-
-// API key — fill AFTER provider dropdown is set
-if (credFields.some(f => f.type === 'api_key') && credentials.apiKey) {
-  await page.locator(
-    'input[placeholder*="key" i], input[name*="key" i], input[placeholder*="api" i], ' +
-    'input[placeholder*="token" i], input[name*="api" i]'
-  ).first().fill(credentials.apiKey);
-}
-
-// Submit — find the most likely submit button (NOT skip/later/dismiss)
-await page.getByRole('button', { name: /sign in|log in|submit|continue|sign up|save|connect|add|confirm/i }).click();
-await waitForPageReady(page);
-
-// Screenshot result → verify success (no error message visible)
-state.isAuthenticated = true;
-```
-
-> **Common trap — onboarding "Set up later" buttons**: Many apps show both a submit button AND a skip/later link on credential forms. When `.env.qa` has the value, ALWAYS click the submit/save/connect button — NEVER the skip/later/dismiss link. Read the screenshot after submission to verify it worked.
-
-3. **If NO matching values exist in `.env.qa`** → ask the user. **Never skip on your own.**
-
-```
-"Credential fields detected at [URL]:
-  - [list each field type + label found]
-  - .env.qa status: [which keys are set vs missing]
-
-How would you like to proceed?
-  1. Provide values now (I'll fill them)
-  2. Add to .env.qa and say 'ready' (I'll re-read it)
-  3. Generate account myself (disposable email — see W-2.7)
-  4. Skip this credential gate (only if you say so)"
-```
-
-> ⛔ **The agent NEVER chooses option 4 on its own.** Only the user can decide to skip. The agent must never autonomously click "Skip", "Set up later", "Maybe later", "Not now", or any bypass/dismiss button in the app UI.
-
-4. **After successful credential entry**:
-   - Screenshot the result page → verify success (no error message)
-   - Note the credential type and method in ui-inventory.md
-   - **Re-add the current URL and previously gated URLs back to the BFS queue** — pages behind this gate are now reachable
-   - Continue BFS from the new page
-   - Note other available methods as: `"Available but not tested: [list]"`
-
-5. **If credential entry fails** (wrong password, rejected key, error shown):
-   - Screenshot the error
-   - Tell user what happened and what the error says
-   - Ask for corrected credentials or skip
-   - **Do NOT stop crawling** — continue with other pages
-
-#### W-2.7: Self-Registration with Email Verification
-
-When user says **"generate yourself"** or **"create account yourself"**:
-
-1. **Generate disposable email** — use an accessible domain:
-```javascript
-const ACCESSIBLE_DOMAINS = ['yopmail.com', 'mailinator.com', 'guerrillamail.com'];
-const email = `qatest-${Date.now()}@yopmail.com`;
-const password = `QAtest${Date.now()}!`;
-```
-
-2. **Fill signup form** → screenshot → submit → screenshot result → READ
-
-3. **Check what happened after submit:**
-
-| Screenshot shows | Action |
-|-----------------|--------|
-| Dashboard / welcome page | Done — save credentials to `.env.qa` |
-| "Check your email" / "Enter verification code" | → **Email verification flow below** |
-| CAPTCHA / reCAPTCHA | Cannot automate — tell user, fall back |
-| "Invite only" / error | Cannot self-register — tell user, fall back |
-
-4. **Email verification flow** — if app requires email verification:
-
-```javascript
-const domain = email.split('@')[1];
-const ACCESSIBLE = ['yopmail.com', 'mailinator.com', 'guerrillamail.com', 'tempmail.plus'];
-
-if (ACCESSIBLE.includes(domain)) {
-  await page.goto('https://yopmail.com');
-  await page.locator('#login').fill(email.split('@')[0]);
-  await page.getByRole('button', { name: /check/i }).click();
-  await page.waitForTimeout(3000);
-
-  const inbox = page.frameLocator('#ifmail');
-  const emailBody = await inbox.locator('body').innerText();
-  const otp = emailBody.match(/\b\d{4,6}\b/)?.[0];
-  const verifyLink = emailBody.match(/https?:\/\/[^\s"<>]+verify[^\s"<>]*/i)?.[0];
-
-  if (verifyLink) {
-    await page.goto(verifyLink);
-  } else if (otp) {
-    await page.goto(process.env.QA_APP_URL);
-    await page.getByPlaceholder(/code|otp|verify/i).fill(otp);
-    await page.getByRole('button', { name: /verify|confirm|submit/i }).click();
-  }
-} else {
-  // Domain not accessible — ask user for OTP
-}
-```
-
-5. **After verification** → save credentials to `.env.qa` → save auth session → continue BFS
-
-**Domain accessibility rules:**
-| Domain | How to access | Notes |
-|--------|--------------|-------|
-| yopmail.com | `https://yopmail.com` → enter username → read iframe | Most reliable |
-| mailinator.com | `https://www.mailinator.com/v4/public/inboxes.jsp?to=[user]` | Some apps block it |
-| guerrillamail.com | `https://grr.la/mail/[user]` | Alternative if others blocked |
-| gmail.com, outlook.com, corporate | **NOT accessible** — ask user for OTP | Cannot automate |
-
-**If one domain is blocked by the app** (signup rejected), try the next accessible domain before falling back to asking the user.
-
-#### W-2.8: Record Results
-
-After BFS completes (queue empty or limit reached), write:
-
-**`qa/knowledgebase/ui-inventory.md`**:
 ```markdown
-## Page Inventory — [AppName]
-
-**Total pages discovered: [N]** | **Public: [N]** | **Auth-gated: [N]** | **Duplicates skipped: [N]**
-
-| # | URL | Screenshot | Page Type | Auth | Key Elements |
-|---|-----|-----------|----------|------|-------------|
-| 1 | [actual URL] | page-[slug].png | [type from screenshot] | [Yes/No] | [elements seen] |
+## YYYY-MM-DD HH:MM — Strategy chosen
+**Strategy**: <bfs | targeted-trace | sitemap-spot-check | custom>
+**Why**: <2-3 sentences citing fingerprint Q1-Q4 answers>
+**Fallback**: <named alternative + when to switch>
+**Runtime helper**: qa/scripts/<strategy>.js
 ```
 
-Page types are **derived from what you see in each screenshot** — not assumed. Common types: landing, auth, app/dashboard, content, settings, pricing, legal — but use whatever fits.
+#### W-2.4 — Write the runtime helper
 
-**`qa/knowledgebase/nav-graph.md`** — built incrementally during crawl:
+Copy the code skeleton from the chosen strategy file into `qa/scripts/<strategy>.js` (e.g. `qa/scripts/bfs.js`). Adapt selectors, wait heuristics, and actionable-element rules to what the fingerprint probe screenshot actually showed. The helper header comment MUST contain:
+
+```javascript
+// Why: <reason this script exists>
+// Strategy: <strategy name — see skills/web/strategies/<name>.md>
+// Fallback: <what to do if this script stalls — different code path, not retry>
+```
+
+Also write a dispatcher stub at `qa/scripts/explore.js` that `require()`s the chosen helper. Subsequent phases and resumes load `explore.js` — swapping strategies means replacing what it dispatches to.
+
+#### W-2.5 — Execute + screenshot + READ
+
+Run the helper. For every page/step:
+1. Navigate / interact via Playwright
+2. Wait `QA_PAGE_WAIT_MS`
+3. Verify state change (URL / DOM fingerprint)
+4. Capture via `scripts/qa-screenshot.js` `capture()` — atomic registration into `flow.md`
+5. **Read** the screenshot with the Read tool before deciding the next action. Never act on assumption alone.
+
+All strategies share the same session artefacts:
+- `qa/knowledgebase/screenshots/` — PNGs from every verified state
+- `qa/knowledgebase/ui-inventory.md` — page inventory (strategy-agnostic schema: url, title, fingerprint, screenshot, auth-gated?)
+- `qa/knowledgebase/nav-graph.md` — every outbound link on every visited page
+- `qa/crawl-state.json` (BFS only) — queue + visited set for mid-crawl resume. If using targeted-trace, write `qa/trace-state.json` instead; if sitemap-spot-check, write `qa/sitemap-groups.json`. The shape is strategy-owned; the principle is identical: **auto-saved after every page so resume is free**.
+
+#### W-2.6 — Credential gate protocol (all strategies)
+
+Any strategy may hit a credential gate (login, SSO, API key). NEVER bypass.
+
+1. Check `.env.qa` for applicable credentials (`QA_TEST_EMAIL`, `QA_TEST_PASSWORD`, `QA_API_KEY`, etc.).
+2. If present — use them. If the gate succeeds, save session state to `qa/.auth/user.json` via Playwright `storageState`.
+3. If absent — **stop, ask the user**, do not click "Skip", "Maybe later", or any bypass button.
+4. Log the gate encounter + outcome in `qa/decisions.md`.
+
+For self-registration (account not pre-provisioned), only proceed if the user explicitly authorizes. Generated credentials get appended to `.env.qa` (gitignored) and logged in `qa/decisions.md` as `"Self-registered test account <email> at YYYY-MM-DD"`.
+
+#### W-2.7 — Watch for stall signals, fall back
+
+Each strategy file names its own stall signals. When one triggers:
+1. Stop the current strategy cleanly (finish the current iteration — do not crash).
+2. Append to `qa/decisions.md`: `"Switching from <X> to <Y> because <signal>."`
+3. Replace or update `qa/scripts/explore.js` to dispatch to the fallback strategy's helper.
+4. Resume — session artefacts (`qa/state.md`, screenshots, nav-graph) carry over. Progress is not lost.
+
+**The flow never breaks.** A stall means switch, not stop.
+
+#### W-2.8 — Record results
+
+At end of strategy execution:
+- `qa/knowledgebase/ui-inventory.md` + `qa/knowledgebase/nav-graph.md` must be current
+- `qa/state.md` gets a checkpoint: strategy used, pages visited, fallback triggered?, next action
+- `qa/decisions.md` closes with a terminal entry: `"<Strategy> complete: N pages, M stalls, fallback-triggered=<yes|no>."`
+
+---
+
+### Runtime Script Evolution
+
+`qa/scripts/` is **Claude-owned**. Every script there traces back to a strategy file under `skills/web/strategies/`. Rules:
+
+- Every script starts with the three-line header (Why / Strategy / Fallback) shown in W-2.4.
+- Updating a script mid-session requires a matching `qa/decisions.md` entry: `"Updated qa/scripts/<name>.js: <what changed> — because <observation from screenshot N>."`
+- Deleting a script requires a matching entry: `"Removed qa/scripts/<name>.js — strategy switched from <X> to <Y>."`
+- Scripts that accumulate without entries are stale. Audit at phase boundaries and prune.
+- **Every generated script reads `QA_HEADLESS` from env**: `chromium.launch({ headless: process.env.QA_HEADLESS !== 'false' })`. Default headless; set `QA_HEADLESS=false` in `.env.qa` to watch the browser.
+- **Every script that interacts with a login form uses `qa/scripts/login-engage.js`** (skeleton in `skills/web/helpers/login-engage.md`). Direct fill+click on a password field is a bug — it cannot detect form-reset-silent failures.
+- **Every interaction calls `qa/scripts/outcome-classifier.js`** (skeleton in `skills/web/helpers/outcome-classifier.md`) and branches on the returned label — never on the legacy `stateChanged` boolean.
+
+This is how Claude "writes its own tools" without losing audit trail. The strategy file is the contract; the script is the implementation; `decisions.md` is the commit log.
+
+---
+
+### Step W-2.9: Role & Flow Inventory Confirmation Gate
+
+> **No tracing begins until the user confirms roles and flow categories.** This step front-loads engagement so the agent never burns tokens on flows the user didn't approve, and so multi-role apps are not wedged on a single global credential pair.
+
+#### 1. Synthesize roles from the inventory
+
+Read `qa/knowledgebase/ui-inventory.md` + `nav-graph.md` and infer roles from:
+- distinct post-auth route prefixes (`/admin/*`, `/member/*`)
+- visible role labels in nav (e.g. "Admin", "Owner", "Viewer")
+- plan-tier badges in the header
+- pages that 403/redirect for the default role
+
+Write `qa/knowledgebase/roles.md`:
+
 ```markdown
-| From | Link/CTA | To | Auth Gate |
-|------|---------|-----|-----------|
-| [source URL] | [link text or CTA label] | [target URL] | [none / requires auth / requires plan] |
+| Role ID | Observed signal | Evidence screenshot | Credential slot |
+|---|---|---|---|
+| admin   | `/admin/*` + "Admin" badge | shot-03.png | QA_ADMIN_EMAIL / QA_ADMIN_PASSWORD |
+| member  | default post-login         | shot-01.png | QA_TEST_EMAIL  / QA_TEST_PASSWORD  |
 ```
 
-Every outbound link on every visited page becomes a row. This is the data that powers flow creation.
+#### 2. Synthesize broad flow categories
 
-**`qa/crawl-state.json`** — already saved incrementally during the loop. Contains the full BFS state for resume.
+Group nav clusters into 5–8 flow categories. Write `qa/knowledgebase/flow-categories.md`:
+
+```markdown
+| Category    | Pages | Roles needed |
+|-------------|-------|--------------|
+| Auth        | /login, /signup, /reset | anonymous → member/admin |
+| Dashboard   | /, /home              | member, admin |
+| Admin Panel | /admin/*              | admin |
+```
+
+#### 3. ONE batched AskUserQuestion
+
+Present roles + categories together. Use a structured `AskUserQuestion` so the user can confirm, edit, or add. Do not ask sequentially — one prompt, multiple answers.
+
+#### 4. Per confirmed role, request credentials
+
+For each confirmed role, in order:
+
+1. Look up `QA_<ROLE>_EMAIL` / `QA_<ROLE>_PASSWORD` in `.env.qa` (e.g. `QA_ADMIN_EMAIL`).
+2. If present → confirm: *"Use the existing admin creds for the Admin role?"*
+3. If absent → `AskUserQuestion` with options: (a) provide creds now, append to `.env.qa`; (b) self-register via UI if app supports it; (c) skip this role's flows for this run.
+4. After successful login (via `qa/scripts/login-engage.js` — see `skills/web/helpers/login-engage.md`), save `storageState` to `qa/.auth/<role>.json`. Add `QA_<ROLE>_STORAGE_STATE=qa/.auth/<role>.json` to `.env.qa`.
+
+#### 5. Only then proceed to W-3
+
+Each W-3 flow declares its `Role` in the Summary table. Traced flows pick the right `storageState` file via `browser.newContext({ storageState: process.env[\`QA_${role.toUpperCase()}_STORAGE_STATE\`] })` — never re-login per flow.
+
+**Login engagement** is delegated to `skills/web/helpers/login-engage.md`. It is the ONLY way to attempt a login from any runtime script — the shallow "fill + click + screenshot" loop is forbidden because it silently mis-classifies HomaCare-style form-reset rejections (see helper doc for evidence).
 
 ---
 

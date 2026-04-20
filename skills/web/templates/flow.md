@@ -8,9 +8,12 @@
 | **Application** | [AppName] |
 | **URL / Base Route** | [e.g., `/dashboard`, `/account`, `/settings`] |
 | **Description** | [One sentence: what goal does this flow accomplish?] |
+| **Why this is a distinct flow** | [2-3 sentences tying this flow's user goal to screenshot evidence and explaining why it is NOT a sub-step of an adjacent flow. Ground in observed UI — not assumption.] |
+| **Strategy used** | [bfs / targeted-trace / sitemap-spot-check / custom] — fallback: [named fallback that would trigger if this strategy stalled] |
 | **Start State** | [Browser state before flow begins, e.g., "Unauthenticated, on homepage"] |
 | **End State** | [Browser state when flow completes successfully] |
 | **Auth Required** | Yes / No |
+| **Role** | anonymous / member / admin / [other — must match `qa/knowledgebase/roles.md`]; storageState: `qa/.auth/<role>.json` |
 | **Priority** | P1 / P2 / P3 |
 | **Discovered via** | Screenshot analysis + Playwright crawl |
 | **Created** | [YYYY-MM-DD] |

@@ -1,5 +1,8 @@
 # Scenarios — F-[NNN]: [Flow Name]
 
+> ⚠️ **The 14 categories below are EXAMPLES AND PREFERRED SUGGESTIONS — apply judgement.**
+> Categories are a **menu, not a mandate**. Pick what fits the flow's user goal and the app's character (from `qa/platform-fingerprint.md`). Always include a fallback for skipped categories that matter.
+
 **Flow**: [F-NNN — flow.md](flow.md)
 **Application**: [AppName]
 **URL / Route**: [base route for this flow]
@@ -9,12 +12,34 @@
 
 ---
 
+## Applicable Categories (derived from fingerprint)
+
+Tick the categories that apply to THIS flow based on fingerprint Q1-Q4. Untick the rest and justify below in "Categories Skipped".
+
+- [ ] Happy Path
+- [ ] Alternative Happy Path
+- [ ] Negative / Invalid Input
+- [ ] Boundary / Edge Case
+- [ ] Auth Guard
+- [ ] SPA Route Access
+- [ ] Session Persistence
+- [ ] Navigation Interruption
+- [ ] Error Recovery (API failure)
+- [ ] Mobile Viewport
+- [ ] Console Error
+- [ ] Accessibility (axe-core)
+- [ ] Visual Regression
+- [ ] Custom — [describe]
+
+---
+
 ## S-[NNN]-01: Happy Path — [Short Description]
 
 | Field | Value |
 |-------|-------|
 | **Priority** | P1 |
 | **Category** | Happy Path |
+| **Why selected for this flow** | [1-2 sentences grounded in fingerprint + flow goal. Every scenario needs this row — add it to all S-[NNN]-NN blocks below as well.] |
 | **Auth** | None / Required |
 | **Preconditions** | [Browser state needed — e.g., "Logged in, on dashboard"] |
 | **Steps summary** | [1–2 sentence description of what the user does] |
@@ -206,6 +231,17 @@
 ---
 
 ## [Add more scenarios following the same table format]
+
+---
+
+## Categories Skipped (with reason)
+
+List every unticked category from the applicable list above, with a 1-sentence reason grounded in fingerprint or flow scope. If a skipped category might still be load-bearing (e.g. auth-guard on a flow that touches session state), declare a **fallback** — either a deferred scenario, a manual check, or a note in `qa/decisions.md`.
+
+| Skipped Category | Reason (cite fingerprint Q#) | Fallback (if any) |
+|---|---|---|
+| [e.g. Visual Regression] | [Q4 audience is internal-only; pixel-perfect not a stakeholder requirement] | [Defer until user requests] |
+| [e.g. Mobile Viewport] | [Q1 desktop-only admin dashboard] | [None — scope is desktop] |
 
 ---
 

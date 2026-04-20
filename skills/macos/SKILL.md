@@ -22,6 +22,17 @@ This file is self-contained. All scripts are inlined. No external file dependenc
 
 ---
 
+## Shared Principles & Fallback Discipline
+
+Before Step 4, you MUST have read the cross-platform base layer:
+- [skills/_shared/principles.md](../_shared/principles.md) — how Claude thinks (screenshot protocol, selector hierarchy, session limits, runtime script evolution)
+- [skills/_shared/fingerprint-questions.md](../_shared/fingerprint-questions.md) — the 5 questions answered in root SKILL.md Step 3.5; `qa/platform-fingerprint.md` drives strategy selection
+- [skills/_shared/fallback-discipline.md](../_shared/fallback-discipline.md) — **non-negotiable rule**: every strategy, runtime script, and test step must declare a fallback. If primary approach stalls, fall back and continue — never break the flow.
+
+macOS does not yet have a `strategies/` directory — the default exploration flow in this file IS the strategy. If future runs document alternatives, they land under `skills/macos/strategies/` and follow the same selection + decisions-log + fallback pattern as the web skill.
+
+---
+
 ## Pre-Step: Load Prior Knowledge
 
 Before doing anything else, check what the root skill extracted from `qa/context/` in Step 3.

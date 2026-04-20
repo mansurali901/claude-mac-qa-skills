@@ -12,7 +12,7 @@
 | **Type** | Functional / UI / Auth / State / Error / A11y / Visual |
 | **Platform** | Web — Chromium / Firefox / WebKit |
 | **Viewport** | Desktop (1280×720) / Mobile (375×812) |
-| **Auth** | None / Required (storageState) |
+| **Auth (role)** | None / `<role>` (storageState: `qa/.auth/<role>.json` — driven by `QA_<ROLE>_STORAGE_STATE` env var) |
 | **Automation** | Playwright (TypeScript) |
 | **Author** | QA Agent |
 | **Created** | [YYYY-MM-DD] |
@@ -33,6 +33,13 @@
 - [ ] Network: [connected / specific condition]
 - [ ] App state: [logged in / logged out / specific route]
 - [ ] [Any other preconditions specific to this test]
+
+#### Fallback if test setup fails
+
+If any precondition cannot be met (auth fixture missing, storageState expired, env var absent):
+1. **Do not bypass.** Log the failure in `qa/decisions.md` with the TC ID and missing item.
+2. **Skip + continue** — mark this TC as `skipped-setup` in the run report and proceed to the next TC.
+3. If three consecutive TCs skip for the same reason, stop the run and surface the setup issue to the user.
 
 ### Auth Setup (if required)
 
@@ -63,6 +70,10 @@ require('dotenv').config({ path: '.env.qa' });
 
 **Priority**: P1
 **Type**: Functional
+
+#### Why this scenario (1-2 sentences)
+
+[Ground in fingerprint + flow goal. Repeat this subsection under every `### Scenario N` header in this file.]
 
 #### Preconditions (specific to this scenario)
 - [Any state beyond the general preconditions above]

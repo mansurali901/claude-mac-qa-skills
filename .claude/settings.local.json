@@ -27,7 +27,8 @@
       "Bash(mkdir -p qa/flows/F-003-onboarding-wizard/test-cases)",
       "Bash(mkdir -p qa/flows/F-004-dashboard-and-assistants/test-cases)",
       "Bash(mkdir -p qa/flows/F-005-ai-models-and-api-keys/test-cases)",
-      "Bash(npm ls *)"
+      "Bash(npm ls *)",
+      "Read(//home/taha/.claude/plans/**)"
     ]
   }
 }
