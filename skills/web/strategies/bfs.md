@@ -18,6 +18,21 @@ platform: web
 
 **Declared fallback**: Switch to **direct-URL probing** of links collected so far. Take the `state.queue` and `hrefLinks` accumulated, drop the click-based nav layer, and `page.goto()` each unique URL with verification. If that also stalls (e.g. soft-404 everywhere), switch to `sitemap-spot-check` (read `/sitemap.xml`). Log every switch in `qa/decisions.md`.
 
+## Tracing Loop Contract
+
+When tracing flows (post-exploration), the agent drives each flow via its `qa/flows/F-NNN-*/manifest.jsonl` until every line reaches a terminal `status`. See `skills/_shared/engagement-protocol.md` → **End-to-End Completion is Mandatory**.
+
+```
+while (line = first `pending` in manifest.jsonl):
+  execute line.action on line.target     // click selector; goto only for seed/resume
+  outcome = classify(page, before, buf)  // outcome-classifier.js
+  append 1 line to qa/progress.jsonl      // ≤150 bytes {ts,flow,step,action,url,outcome}
+  update manifest.jsonl line.status = done | skipped(reason) | blocked(reason)
+  if outcome in {error-surfaced, auth-rejected-server, form-reset-silent, network-timeout}:
+    askUser(...); resume loop after answer
+after loop: mark flow TRACED in journey-inventory.md; auto-advance to next PENDING flow
+```
+
 **Outcome classification**: every interaction calls `qa/scripts/outcome-classifier.js` (see `skills/web/helpers/outcome-classifier.md`) and branches on the returned label. ONLY `no-change` increments `consecutiveStalls`. `error-surfaced` / `auth-rejected-server` / `form-reset-silent` / `network-timeout` engage the user via `AskUserQuestion` — never silently counted as a stall. **Login forms are handled via `qa/scripts/login-engage.js`** (see `skills/web/helpers/login-engage.md`); direct fill+click is forbidden.
 
 ---

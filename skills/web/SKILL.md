@@ -354,6 +354,10 @@ Each W-3 flow declares its `Role` in the Summary table. Traced flows pick the ri
 
 After BFS crawl, organize discovered pages into **feature-scoped flows** — one flow per distinct feature area (3-7 steps each).
 
+**Manifest-first tracing.** Before executing any step in a flow, write its plan to `qa/flows/F-NNN-<slug>/manifest.jsonl` — one line per step `{step, action, target, url, status:"pending"}`. Then run the **Tracing Loop Contract** (see strategy files; governed by `skills/_shared/engagement-protocol.md` → *End-to-End Completion is Mandatory*): drive every manifest line to terminal status, append one line to `qa/progress.jsonl` per step, and auto-advance to the next PENDING flow in `journey-inventory.md` when the manifest is fully terminal. Do not stop mid-flow to ask the user what's left — the manifest is the answer.
+
+**Resume**: `grep -v '"status":"done"' qa/flows/<active>/manifest.jsonl` → continue at the first non-done line. `tail -n 30 qa/progress.jsonl` confirms the last concrete action.
+
 #### How to identify flows from the page inventory:
 
 Group pages into flows based on **what the crawl actually found** — not assumed categories. Use these signals:

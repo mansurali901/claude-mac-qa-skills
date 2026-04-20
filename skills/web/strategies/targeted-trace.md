@@ -22,6 +22,23 @@ platform: web
 
 ---
 
+## Tracing Loop Contract
+
+Each flow is driven by its `qa/flows/F-NNN-*/manifest.jsonl` until every line reaches terminal `status`. See `skills/_shared/engagement-protocol.md` → **End-to-End Completion is Mandatory**.
+
+```
+while (line = first `pending` in manifest.jsonl):
+  execute line.action on line.target     // click selector; goto only for seed/resume
+  outcome = classify(page, before, buf)  // outcome-classifier.js
+  append 1 line to qa/progress.jsonl      // ≤150 bytes
+  update manifest.jsonl line.status = done | skipped(reason) | blocked(reason)
+  if outcome in {error-surfaced, auth-rejected-server, form-reset-silent, network-timeout}:
+    askUser(...); resume loop after answer
+after loop: mark flow TRACED in journey-inventory.md; auto-advance to next PENDING flow
+```
+
+---
+
 ## How It Works
 
 Single-threaded depth-first walk through ONE intended persona path. No queue, no breadth.

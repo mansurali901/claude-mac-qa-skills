@@ -223,7 +223,19 @@ All platforms share a single state file: `qa/state.md`. Testing a different app 
 
 ### How to Write the Checkpoint
 
-**Light checkpoints** (per-flow): Update only the Flows table and Resume Instructions in the existing `qa/state.md`. Do NOT rewrite the entire file — just mark the completed flow and update the next action.
+**Light checkpoints** (per-flow): Overwrite only the `## Active Position` pointer block in `qa/state.md` — ≤6 lines — pointing at the active flow's `manifest.jsonl` (the step-level truth) and `qa/progress.jsonl` (append-only ledger). Do NOT rewrite the full file. Shape:
+
+```markdown
+## Active Position
+- **Active flow**: F-NNN (<name>)
+- **Next step**: first non-done line in `qa/flows/F-NNN-<slug>/manifest.jsonl`
+- **Progress log**: `tail -n 30 qa/progress.jsonl`
+- **Flows remaining**: F-NNN, F-NNN, … (see `qa/knowledgebase/journey-inventory.md`)
+```
+
+**Autonomous completion is mandatory.** Per `skills/_shared/engagement-protocol.md` → *End-to-End Completion is Mandatory*, once a flow's manifest is open the agent drives every step to terminal status (`done` / `skipped(reason)` / `blocked(reason)`) and auto-advances to the next PENDING flow in `journey-inventory.md` without prompting the user.
+
+**Deterministic resume** — on fresh context, read `qa/state.md` → `tail -n 30 qa/progress.jsonl` → `grep -v '"status":"done"' qa/flows/<active>/manifest.jsonl` → continue at the first non-done line. No re-exploration.
 
 **Heavy checkpoints** (phase boundaries, stop/pause): Write (or overwrite) the full `qa/state.md` using this template. Fill every section with real values — no placeholders left blank.
 

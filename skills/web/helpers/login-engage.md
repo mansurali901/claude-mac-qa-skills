@@ -1,6 +1,6 @@
 ---
 name: login-engage
-description: Network-first login subroutine. Fixes the HomaCare silent form-reset failure mode. Runtime scripts copy this to qa/scripts/login-engage.js.
+description: Network-first login subroutine. Handles the silent form-reset failure mode common to SPAs (any platform). Runtime scripts copy this to qa/scripts/login-engage.js.
 type: helper
 ---
 
@@ -15,13 +15,9 @@ Invoke when ANY of:
 - A `password` input is visible on the page
 - The role-credential gate (web SKILL.md Step W-2.5) marked this role as needing auth
 
-## The HomaCare failure (why this exists)
+## The failure mode (why this exists)
 
-Evidence in `qa/knowledgebase/screenshots/page-13-login-filled.png` and `page-14-post-login.png`:
-- page-13: email + password filled, Sign In button enabled
-- page-14: SAME URL, SAME login layout, BUT BOTH FIELDS BLANK and NO error message rendered
-
-The previous flow read both ~8 KB screenshots, saw no URL change, no visible error, declared "no state change → blocker" — and stopped. The actual failure was a server-side rejection that the SPA handled by clearing the form without rendering an error. **Ground truth was in the network response we never captured.**
+Common pattern across SPAs on any platform: creds filled → submit clicked → URL unchanged, inputs cleared, no visible error. Shallow detectors see no URL change + no visible error and declare "no state change → blocker". The actual failure is server-side rejection the SPA handled by clearing the form without rendering an error. **Ground truth lives in the network response** — this helper captures it instead of re-reading near-identical screenshots.
 
 ## Protocol — 8 steps, one browser round-trip cluster
 

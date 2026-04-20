@@ -28,7 +28,12 @@
       "Bash(mkdir -p qa/flows/F-004-dashboard-and-assistants/test-cases)",
       "Bash(mkdir -p qa/flows/F-005-ai-models-and-api-keys/test-cases)",
       "Bash(npm ls *)",
-      "Read(//home/taha/.claude/plans/**)"
+      "Read(//home/taha/.claude/plans/**)",
+      "Bash(sed -i 's|`\\\\${BASE}/en/|`\\\\${BASE}/|g' qa/flows/**/*.spec.ts qa/flows/auth.setup.ts)",
+      "Bash(sed -i \"s|'/en/hormones'|'/hormones'|g; s|'/en/intimacy'|'/intimacy'|g; s|'/en/erection'|'/erection'|g; s|'/en/anxiety'|'/anxiety'|g; s|'/en/birthControl'|'/birthControl'|g; s|'/en/consultations'|'/consultations'|g; s|'/en/aboutUs'|'/aboutUs'|g; s|'/en/service'|'/service'|g; s|'/en/policy'|'/policy'|g\" qa/flows/**/*.spec.ts)",
+      "Bash(sed -i 's|/en/labtest/|/labtest/|g' qa/flows/**/*.spec.ts)",
+      "Bash(sed -i 's|/admin/dashboard|/admin/dashboard|g' qa/flows/**/*.spec.ts qa/flows/auth.setup.ts)",
+      "Bash(sed -i 's|/en/login|/login|g' qa/flows/**/*.spec.ts qa/flows/auth.setup.ts)"
     ]
   }
 }

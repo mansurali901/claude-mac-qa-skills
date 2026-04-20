@@ -22,6 +22,23 @@ platform: web
 
 ---
 
+## Tracing Loop Contract
+
+When tracing flows derived from sitemap entries, each flow is driven by its `qa/flows/F-NNN-*/manifest.jsonl` until every line reaches terminal `status`. See `skills/_shared/engagement-protocol.md` → **End-to-End Completion is Mandatory**.
+
+```
+while (line = first `pending` in manifest.jsonl):
+  execute line.action on line.target     // goto allowed here: URLs come from sitemap.xml
+  outcome = classify(page, before, buf)  // outcome-classifier.js
+  append 1 line to qa/progress.jsonl      // ≤150 bytes
+  update manifest.jsonl line.status = done | skipped(reason) | blocked(reason)
+  if outcome in {error-surfaced, network-timeout}:
+    askUser(...); resume loop after answer
+after loop: mark flow TRACED in journey-inventory.md; auto-advance to next PENDING flow
+```
+
+---
+
 ## How It Works
 
 ### Loop Structure
