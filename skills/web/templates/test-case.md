@@ -1,3 +1,16 @@
+<!--
+QUALITY CONTRACT — agent instruction, not rendered in output.
+Every generated spec MUST satisfy ALL of the following before W-11 extraction:
+1. Syntactically valid TypeScript — no missing `await`, no unresolved imports.
+2. Logically complete — every step has a meaningful `expect()`. No `// TODO`, no empty `expect()`.
+3. No placeholder values — no `[selector]`, `[route]`, `[label]`, `[value]` in code blocks.
+4. No hardcoded credentials — all creds via `process.env.QA_*`.
+5. Semantic locators: getByRole > getByLabel > getByTestId > CSS (CSS needs a comment explaining why).
+6. No bare `waitForTimeout` — use waitForSelector / waitForResponse / waitForURL / waitForFunction.
+7. storageState at test.use() level — never re-login inside a test with a cached session.
+Violations must be fixed inline before W-11 runs. The Quality Review Gate (Step W-10.5) enforces this.
+-->
+
 # TC-[NNN]: [Feature / Flow Name]
 
 ## Metadata
@@ -91,28 +104,34 @@ require('dotenv').config({ path: '.env.qa' });
 
 ```typescript
 import { test, expect } from '@playwright/test';
+import * as dotenv from 'dotenv';
+dotenv.config({ path: '.env.qa' });
+
+// Auth: load cached session — never re-login inside the test body
+// test.use({ storageState: process.env.QA_<ROLE>_STORAGE_STATE ?? 'qa/.auth/member.json' });
 
 test('TC-[NNN]-S1: [Happy path description]', async ({ page }) => {
-  // Step 1: Navigate
-  await page.goto('/[route]', { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(2000);
+  // Step 1: Navigate to seed URL only — all further nav is via clicks
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[visible-landmark-selector]', { timeout: 10000 });
   await page.screenshot({ path: 'qa/knowledgebase/screenshots/TC-[NNN]-S1-step01.png', fullPage: true });
 
-  // Step 2: [Action]
-  await page.locator('[selector]').click();
-  await page.waitForTimeout(1000);
+  // Step 2: Click nav element (prefer semantic locators)
+  await page.getByRole('link', { name: '[nav label]' }).click();
+  await page.waitForURL(/[expected-route-pattern]/, { timeout: 10000 });
   await page.screenshot({ path: 'qa/knowledgebase/screenshots/TC-[NNN]-S1-step02.png', fullPage: false });
 
-  // Step 3: [Fill field]
-  await page.getByLabel('[label]').fill('[value]');
+  // Step 3: Fill field
+  await page.getByLabel('[field label]').fill(process.env.QA_TEST_EMAIL ?? '');
 
-  // Step N: Submit
+  // Step N: Submit and wait for response
+  const responsePromise = page.waitForResponse(r => r.url().includes('/api/') && r.request().method() === 'POST');
   await page.getByRole('button', { name: '[Submit label]' }).click();
-  await page.waitForTimeout(2000);
+  await responsePromise;
   await page.screenshot({ path: 'qa/knowledgebase/screenshots/TC-[NNN]-S1-result.png', fullPage: true });
 
-  // Assertions
-  await expect(page.locator('[success selector]')).toBeVisible();
+  // Assertions — must be concrete, never empty
+  await expect(page.getByRole('[role]', { name: '[success text]' })).toBeVisible();
   await expect(page).toHaveURL(/[expected-route]/);
 });
 ```
