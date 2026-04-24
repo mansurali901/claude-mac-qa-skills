@@ -75,6 +75,26 @@ const modal = page.getByRole('dialog');
 await expect(modal).toBeVisible();
 await modal.getByRole('button', { name: 'Confirm' }).click();
 await expect(modal).toBeHidden();
+
+// Bypassing disruptive onboarding overlays/tours BEFORE interacting with main UI
+const skipBtn = page.getByRole('button', { name: /skip|dismiss|close/i });
+if (await skipBtn.first().isVisible({ timeout: 2000 })) {
+  await skipBtn.first().click({ force: true });
+  await page.waitForTimeout(1000); // wait for fade out
+}
+```
+
+---
+
+## Complex Dropdowns & React Portals
+
+If standard clicks fail or time out on dropdown options because they spawn as detached React Portals over the DOM:
+
+```typescript
+await page.getByRole('combobox').click();
+// Specifically wait for the spawned drop-down list items
+await page.waitForSelector('[role="option"]', { state: 'visible' });
+await page.getByRole('option', { name: 'Target Selection' }).click({ force: true });
 ```
 
 ---

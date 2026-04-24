@@ -50,7 +50,7 @@ These `.env.qa` variables tune the BFS crawler. Defaults work for most apps — 
 **Goal**: Discover EVERY reachable page in the application via deep BFS crawl, then organize into feature-scoped flows.
 **Priority**: Exploration first — maximize pages discovered. Auth is a gate to pass through, not a journey to trace. **NEVER skip any credential gate, setup step, or onboarding step without explicit user permission.** If `.env.qa` has values → use them. If not → ask the user. The agent must never autonomously click "Skip", "Set up later", "Maybe later", or any bypass button.
 **Output**: `qa/knowledgebase/` (screenshots, ui-inventory, nav-graph) + `qa/flows/F-NNN-*/flow.md` per feature area.
-**Transition to Phase 2**: Automatic — after all pages discovered and flows documented.
+**Transition to Phase 2**: Gated — after all flows traced, the agent runs a **deep-exploration `AskUserQuestion`** (Phase 1 → Phase 2 Transition step 3). User either requests more exploration or approves the move to Phase 2. Session is checkpointed to `qa/state.md` at the end of every deeper pass.
 
 ---
 
@@ -241,8 +241,9 @@ Run the helper. For every page/step:
 1. Navigate / interact via Playwright
 2. Wait `QA_PAGE_WAIT_MS`
 3. Verify state change (URL / DOM fingerprint)
-4. Capture via `scripts/qa-screenshot.js` `capture()` — atomic registration into `flow.md`
+4. Capture via `scripts/qa-screenshot.js` `capture()` — writes `<file>.png` + `<file>.png.dom.json` atomically, registers in `flow.md`
 5. **Read** the screenshot with the Read tool before deciding the next action. Never act on assumption alone.
+6. **Read** the `.dom.json` sidecar — `dom.inputs` for form fields, `dom.buttons` for CTAs, `dom.links` for navigation links (all available at default `action` tier). No extra `page.evaluate()` needed.
 
 All strategies share the same session artefacts:
 - `qa/knowledgebase/screenshots/` — PNGs from every verified state
@@ -417,6 +418,8 @@ Screenshots taken during BFS crawl are **already captured** in `qa/flows/seed-cr
 
 #### Present to user:
 
+Summarize what was discovered — flow table only, no freeform prose. The deep-exploration gate happens at the Phase 1 → Phase 2 transition after coverage is verified (see below).
+
 > "Discovered **[N] pages** across **[M] feature areas**:
 >
 > | Flow | Section | Pages | Auth |
@@ -425,7 +428,7 @@ Screenshots taken during BFS crawl are **already captured** in `qa/flows/seed-cr
 > | F-002 | [section name] | [N] | [Yes/No] |
 > | ... | | | |
 >
-> Any sections I should explore deeper?"
+> Tracing all flows now. Will ask before moving to scenario planning."
 
 ---
 
@@ -453,9 +456,9 @@ Write/update `qa/knowledgebase/` with:
 
 ---
 
-## Phase 1 → Phase 2 Transition (automatic)
+## Phase 1 → Phase 2 Transition
 
-After all flows are traced (Step W-6 complete), do the **deferred housekeeping** that was skipped during per-flow resets:
+After all flows are traced (Step W-6 complete), do the **deferred housekeeping** and run the **deep-exploration gate** before proceeding.
 
 1. **Update `qa/knowledgebase/journey-inventory.md`** — batch-update all flows as TRACED or SKIPPED based on what exists in `qa/flows/`
 
@@ -477,14 +480,76 @@ After all flows are traced (Step W-6 complete), do the **deferred housekeeping**
    ```
    If orphans found → register them with `node scripts/qa-screenshot.js` before continuing.
 
-3. **Generate the QA report** — this is the correct time for report generation:
+3. **Deep-exploration gate — `AskUserQuestion`** (mandatory stop before Phase 2):
+
+   Present a coverage summary, then ask:
+
+   ```
+   Question: "Phase 1 exploration is complete.
+
+   Coverage summary:
+   - Pages discovered: [N]
+   - Flows traced: [M] ([list flow IDs and names])
+   - Screenshots: [K]
+   - Auth-gated areas: [reached / not reached — list any skipped]
+
+   Would you like me to go deeper before I generate test scenarios?"
+
+   Options:
+   1. "Yes — explore [specific area / flow / auth-gated section] more deeply"
+   2. "Yes — explore all auth-gated areas I haven't reached yet"
+   3. "Looks complete — continue to Phase 2 (scenario planning)"
+   4. "Stop here and save session state only — I'll resume later"
+   ```
+
+   **If user picks option 1 or 2**:
+   - Perform the requested deeper exploration (BFS sub-crawl, targeted trace, or specific click sequence)
+   - Use `capture()` for every screenshot — the same rules as Phase 1 apply
+   - Register all new screenshots in the relevant `flow.md` or create a new `F-NNN-*` flow if the area is distinct
+   - After the deeper pass completes: **checkpoint** — append to `qa/state.md`:
+     ```
+     ## Deeper Exploration Pass — [timestamp]
+     Areas explored: [list]
+     New pages found: [N]
+     New flows created: [list or none]
+     Next: awaiting user direction
+     ```
+   - Loop back to step 3 — ask again. Repeat until user picks option 3 or 4.
+
+   **If user picks option 4**:
+   - Write final `qa/state.md` checkpoint (see below)
+   - Generate the QA report: `node scripts/allure/generate-report.js --open`
+   - **Stop**. Do not proceed to Phase 2.
+
+   **If user picks option 3**: proceed to step 4.
+
+4. **Generate the QA report** — one report covering all Phase 1 flows and any deeper passes:
    ```bash
    node scripts/allure/generate-report.js --open
    ```
 
-4. **Checkpoint** — write `qa/state.md`, log: `"Phase 1 complete — [N] flows traced. Continuing to Phase 2..."`
+5. **Checkpoint** — write `qa/state.md`:
+   ```markdown
+   ## Session State — Phase 1 Complete
 
-5. **Continue immediately to Phase 2** — do NOT wait for user approval.
+   **App**: [app name] ([QA_APP_URL])
+   **Platform**: web
+   **Completed**: [timestamp]
+
+   ### Coverage
+   - Pages discovered: [N]
+   - Flows traced: [M] — [list flow IDs]
+   - Deeper exploration passes: [K] (or none)
+   - Auth-gated flows pending: [list or none]
+
+   ### Active Position
+   Phase 1 complete. Proceeding to Phase 2 (scenario planning).
+
+   ### Resume Command
+   Re-invoke the skill. It will detect HAS_WORKSPACE mode and resume from Phase 2.
+   ```
+
+6. **Continue to Phase 2** — automatic from here.
    If auth-gated flows need credentials → ask user for credentials → once provided, continue.
 
 ---
@@ -792,8 +857,9 @@ Wait for user's choice.
 1. **Never hardcode URLs** — always `process.env.QA_APP_URL` or `page.goto('/')` (relative)
 2. **Never hardcode credentials** — always `process.env.QA_TEST_EMAIL`, `process.env.QA_TEST_PASSWORD`
 3. **Never use `networkidle`** — use `domcontentloaded` + `QA_PAGE_WAIT_MS` (configurable minimum wait)
-4. **Always use `capture()`** for screenshots — never raw `page.screenshot()` — prevents orphans
-5. **Screenshot AFTER interaction** — wait, verify, reveal hidden content, THEN screenshot (W-2.3 loop order)
+4. **Always use `capture()`** for screenshots in ALL discovery scripts — never raw `page.screenshot()` — prevents orphaned screenshots and ensures the `.dom.json` DOM sidecar is written automatically. This applies to bfs.js, every probe-*.js, and any ad-hoc exploration script written during the session.
+5. **Screenshot BEFORE credential fill, AFTER error check** — the PNG must show the clean empty form state, not credentials pre-filled by the agent. Reveal-hidden-content (W-2.4) runs AFTER screenshot for link discovery only. (See W-2.3 loop order.)
+5a. **Never guess SPA sub-routes in probe scripts** — SPAs use client-side routing. A direct `page.goto('${QA_APP_URL}dashboard/channels')` will 404 because the route doesn't exist on the server. Instead, load the authenticated entry point (e.g. `/dashboard`) and navigate via UI clicks — the same click-based Navigate step used in the BFS loop (W-2.3 step 2). If you must use `page.goto()` for a known anchor URL (e.g. the root `/dashboard`), always call `isErrorPage(page)` after navigation and skip `capture()` if it returns non-null.
 6. **Verify every navigation** — compare `page.url()` to intended URL; name screenshots by ACTUAL URL, not intended
 7. **Credentials gate** — do not write TCs until user confirms `.env.qa` is populated
 8. **Relative URLs only** in test files — `'/'` not `'https://app.example.com/'`

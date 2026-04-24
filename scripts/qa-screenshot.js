@@ -201,9 +201,402 @@ function findFlowDir(flowName) {
 }
 
 // =========================================================================
+// DOM extraction
+// =========================================================================
+
+/**
+ * Extract all visible interactive elements from the current page state.
+ * Saved as a .dom.json sidecar alongside every screenshot.
+ * Callers (login-engage, signup-engage, BFS) can read this instead of
+ * running their own page.evaluate() — one less round-trip, consistent schema.
+ */
+/**
+ * extractDOM - Agent-Optimized Tiered DOM Extraction
+ *
+ * Philosophy:
+ *   Screenshot -> what does the page look like
+ *   DOM        -> how do I interact with it (selectors + state only, no visual info)
+ *
+ * Tiers:
+ *   'minimal'  ~80-150 tokens   - after each step, page state check
+ *   'action'   ~300-600 tokens  - before click/type/select; includes inputs, buttons, links
+ *   'full'     ~2000-4000 tokens - debug or complex multi-form pages
+ *
+ * Usage:
+ *   const dom = await extractDOM(page)              // default: 'action'
+ *   const dom = await extractDOM(page, 'minimal')
+ *   const dom = await extractDOM(page, 'full')
+ */
+async function extractDOM(playwrightPage, tier = 'action') {
+  try {
+    return await playwrightPage.evaluate((tier) => {
+
+      // -----------------------------------------------------------
+      // HELPERS
+      // -----------------------------------------------------------
+
+      const getCssPath = el => {
+        if (!el) return '';
+        if (el.id) return `#${el.id}`;
+        const parts = [];
+        let node = el;
+        while (node.nodeType === Node.ELEMENT_NODE && node.tagName.toLowerCase() !== 'html') {
+          if (node.id) { parts.unshift(`#${node.id}`); break; }
+          let seg = node.tagName.toLowerCase();
+          if (node.className && typeof node.className === 'string' && node.className.trim()) {
+            seg += '.' + node.className.trim().split(/\s+/).slice(0, 2).join('.');
+          } else {
+            let sib = node, nth = 1;
+            while ((sib = sib.previousElementSibling)) nth++;
+            seg += `:nth-child(${nth})`;
+          }
+          parts.unshift(seg);
+          node = node.parentNode;
+        }
+        const path = parts.join(' > ');
+        if (path.length <= 120) return path;
+        const cut = path.lastIndexOf(' > ', 120);
+        return cut > 0 ? path.slice(0, cut) : path.slice(0, 120);
+      };
+
+      const getSel = el =>
+        el.getAttribute('data-testid') ||
+        el.getAttribute('data-test')   ||
+        el.getAttribute('data-cy')     ||
+        (el.id ? `#${el.id}` : getCssPath(el));
+
+      const isVisible = el => {
+        if (el.getAttribute('aria-hidden') === 'true') return false;
+        const r = el.getBoundingClientRect();
+        const s = window.getComputedStyle(el);
+        return (
+          r.width > 0 && r.height > 0 &&
+          s.visibility !== 'hidden' &&
+          s.display     !== 'none'   &&
+          s.opacity     !== '0'      &&
+          el.offsetParent !== null
+        );
+      };
+
+      const inViewport = el => {
+        const r = el.getBoundingClientRect();
+        return (
+          r.top  < window.innerHeight && r.bottom > 0 &&
+          r.left < window.innerWidth  && r.right  > 0
+        );
+      };
+
+      const isInView = el => isVisible(el) && inViewport(el);
+
+      const resolveLabel = el => {
+        const al = el.getAttribute('aria-label');
+        if (al) return al.trim().slice(0, 60);
+
+        const alby = el.getAttribute('aria-labelledby');
+        if (alby) {
+          const ref = document.getElementById(alby);
+          if (ref) return ref.textContent.trim().slice(0, 60);
+        }
+
+        if (el.id) {
+          const lbl = document.querySelector(`label[for="${el.id}"]`);
+          if (lbl) return lbl.textContent.trim().slice(0, 60);
+        }
+        return '';
+      };
+
+      const getPageState = () => {
+        if (document.querySelector(
+          '[aria-busy="true"], .spinner, [class*="skeleton"], [class*="shimmer"], [class*="loading"]'
+        )) return 'loading';
+        if (document.querySelector('.error-page, [class*="error-boundary"]'))
+          return 'error';
+        return 'ready';
+      };
+
+      const getErrors = (filterFn = isVisible) =>
+        Array.from(document.querySelectorAll(
+          '[aria-invalid="true"], [role="alert"], .alert-danger, [class*="error-message"], [class*="field-error"]'
+        ))
+        .filter(filterFn)
+        .map(el => ({ text: el.textContent.trim().slice(0, 100), sel: getSel(el) }))
+        .filter(e => e.text);
+
+      // -----------------------------------------------------------
+      // TIER 1 - MINIMAL
+      // -----------------------------------------------------------
+
+      const buildMinimal = () => ({
+        tier:  'minimal',
+        url:   location.href,
+        title: document.title,
+        ts:    Date.now(),
+        state: getPageState(),
+
+        viewport: {
+          w:          window.innerWidth,
+          h:          window.innerHeight,
+          scrollY:    window.scrollY,
+          pageH:      document.body.scrollHeight,
+          scrollable: document.body.scrollHeight > window.innerHeight
+        },
+
+        modal:   !!document.querySelector('[role="dialog"]:not([hidden])'),
+        focused: document.activeElement ? getSel(document.activeElement) : null,
+
+        alerts: Array.from(document.querySelectorAll('[role="alert"],[role="status"]'))
+          .filter(isVisible)
+          .map(el => el.textContent.trim().slice(0, 100))
+          .filter(Boolean),
+
+        errors: getErrors()
+      });
+
+      // -----------------------------------------------------------
+      // TIER 2 - ACTION
+      // -----------------------------------------------------------
+
+      const buildAction = () => {
+        const base = buildMinimal();
+
+        const inputs = Array.from(document.querySelectorAll('input:not([type=hidden])'))
+          .filter(isInView)
+          .map(el => {
+            const o = { sel: getSel(el), type: el.type || 'text' };
+            const label = resolveLabel(el);
+            if (label)    o.label    = label;
+            if (el.required || el.getAttribute('aria-required') === 'true') o.required = true;
+            if (el.disabled) o.disabled = true;
+            if (el.getAttribute('aria-invalid') === 'true') o.invalid = true;
+            if (el.type !== 'password' && el.value) o.value = el.value;
+            if (el.type === 'checkbox' || el.type === 'radio') o.checked = el.checked;
+            if (el.placeholder) o.placeholder = el.placeholder.slice(0, 50);
+            if (el.pattern)     o.pattern = el.pattern;
+            if (el.min)         o.min = el.min;
+            if (el.max)         o.max = el.max;
+            if (el.name)        o.name = el.name;
+            return o;
+          });
+
+        const selects = Array.from(document.querySelectorAll('select'))
+          .filter(isInView)
+          .map(el => {
+            const o = { sel: getSel(el) };
+            const label = resolveLabel(el);
+            if (label) o.label = label;
+            if (el.required || el.getAttribute('aria-required') === 'true') o.required = true;
+            if (el.disabled) o.disabled = true;
+            const cur = el.options[el.selectedIndex]?.text || '';
+            if (cur) o.current = cur;
+            o.options = el.options.length <= 15
+              ? Array.from(el.options).map(opt => ({ v: opt.value, t: opt.text, on: opt.selected || undefined }))
+              : `${el.options.length} options - use tier:full`;
+            return o;
+          });
+
+        const textareas = Array.from(document.querySelectorAll('textarea'))
+          .filter(isInView)
+          .map(el => {
+            const o = { sel: getSel(el) };
+            const label = resolveLabel(el);
+            if (label) o.label = label;
+            if (el.required || el.getAttribute('aria-required') === 'true') o.required = true;
+            if (el.disabled) o.disabled = true;
+            if (el.value) o.value = el.value.slice(0, 200);
+            if (el.placeholder) o.placeholder = el.placeholder.slice(0, 50);
+            return o;
+          });
+
+        const buttons = Array.from(document.querySelectorAll(
+          'button, input[type=submit], input[type=button], input[type=reset], [role="button"]'
+        ))
+          .filter(isInView)
+          .map(el => {
+            const text = (el.textContent || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 80);
+            if (!text) return null;
+            const o = { sel: getSel(el), text };
+            const type = el.type || el.getAttribute('role') || 'button';
+            if (type !== 'button') o.type = type;
+            if (el.disabled || el.getAttribute('aria-disabled') === 'true') o.disabled = true;
+            return o;
+          })
+          .filter(Boolean);
+
+        const ariaWidgets = Array.from(document.querySelectorAll(
+          '[role="listbox"],[role="combobox"],[role="tablist"],[role="menu"],[role="tree"],[role="grid"]'
+        ))
+          .filter(isInView)
+          .map(el => ({
+            sel:      getSel(el),
+            role:     el.getAttribute('role'),
+            label:    resolveLabel(el),
+            expanded: el.getAttribute('aria-expanded') || null,
+            disabled: el.getAttribute('aria-disabled') === 'true' || null
+          }))
+          .map(w => Object.fromEntries(Object.entries(w).filter(([, v]) => v !== null)));
+
+        const images = Array.from(document.querySelectorAll('img, svg'))
+          .filter(el => {
+            if (!isInView(el)) return false;
+            const r = el.getBoundingClientRect();
+            if (el.tagName === 'svg' && r.width < 40 && !el.getAttribute('aria-label')) return false;
+            return !!(
+              el.onclick ||
+              el.closest('a, button, [role="button"]') ||
+              el.getAttribute('alt') ||
+              el.getAttribute('aria-label')
+            );
+          })
+          .map(el => ({
+            sel:      getSel(el),
+            alt:      el.getAttribute('alt') || el.getAttribute('aria-label') || '',
+            clickable: !!(el.onclick || el.closest('a, button, [role="button"]'))
+          }));
+
+        const seenHrefs = new Set();
+        const links = Array.from(document.querySelectorAll('a, [role="link"]'))
+          .filter(isInView)
+          .map(el => ({
+            text: (el.textContent || '').trim().slice(0, 80),
+            href: el.getAttribute('href') || '',
+            label: el.getAttribute('aria-label') || ''
+          }))
+          .filter(l => {
+            if (!l.href || l.href.startsWith('#')) return false;
+            if (!l.text && !l.label) return false;
+            if (seenHrefs.has(l.href)) return false;
+            seenHrefs.add(l.href);
+            return true;
+          })
+          .slice(0, 20);
+
+        return {
+          ...base,
+          tier: 'action',
+          inputs,
+          selects,
+          textareas,
+          buttons,
+          ...(links.length       && { links }),
+          ...(ariaWidgets.length && { ariaWidgets }),
+          ...(images.length      && { images })
+        };
+      };
+
+      // -----------------------------------------------------------
+      // TIER 3 - FULL
+      // -----------------------------------------------------------
+
+      const buildFull = () => {
+        const base = buildAction();
+
+        const allInputs = Array.from(document.querySelectorAll('input:not([type=hidden])'))
+          .filter(isVisible)
+          .map(el => ({
+            sel:      getSel(el),
+            type:     el.type || 'text',
+            label:    resolveLabel(el),
+            required: el.required || el.getAttribute('aria-required') === 'true',
+            disabled: el.disabled,
+            invalid:  el.getAttribute('aria-invalid') === 'true',
+            value:    el.type === 'password' ? '' : (el.value || ''),
+            ...(( el.type === 'checkbox' || el.type === 'radio') && { checked: el.checked })
+          }));
+
+        const seenHrefs = new Set();
+        const links = Array.from(document.querySelectorAll('a, [role="link"]'))
+          .filter(isVisible)
+          .map(el => ({
+            text:  (el.textContent || '').trim().slice(0, 80),
+            href:  el.getAttribute('href') || '',
+            label: el.getAttribute('aria-label') || ''
+          }))
+          .filter(l => {
+            if (!l.href || l.href.startsWith('#')) return false;
+            if (!l.text && !l.label) return false;
+            if (seenHrefs.has(l.href)) return false;
+            seenHrefs.add(l.href);
+            return true;
+          });
+
+        const headings = Array.from(document.querySelectorAll('h1,h2,h3'))
+          .filter(isVisible)
+          .map(el => ({ lvl: el.tagName, text: el.textContent.trim().slice(0, 80) }));
+
+        const forms = Array.from(document.querySelectorAll('form'))
+          .filter(isVisible)
+          .map(f => ({
+            sel:    getSel(f),
+            id:     f.id || '',
+            inputs: f.querySelectorAll('input:not([type=hidden])').length,
+            action: f.getAttribute('action') || ''
+          }));
+
+        const accordions = Array.from(document.querySelectorAll(
+          'details, [aria-expanded][role], [role="region"]'
+        ))
+          .filter(isVisible)
+          .map(el => ({
+            sel:  getSel(el),
+            text: el.textContent.trim().slice(0, 80),
+            open: el.tagName === 'DETAILS'
+              ? el.open
+              : el.getAttribute('aria-expanded') === 'true'
+          }));
+
+        const selectsFull = Array.from(document.querySelectorAll('select'))
+          .filter(isVisible)
+          .map(el => ({
+            sel:     getSel(el),
+            label:   resolveLabel(el),
+            options: Array.from(el.options).map(o => ({ v: o.value, t: o.text, on: o.selected || undefined }))
+          }));
+
+        return {
+          ...base,
+          tier: 'full',
+          allInputs,
+          links,
+          headings,
+          forms,
+          accordions,
+          selectsFull
+        };
+      };
+
+      if (tier === 'minimal') return buildMinimal();
+      if (tier === 'full')    return buildFull();
+      return buildAction();
+
+    }, tier);
+
+  } catch (err) {
+    return {
+      tier,
+      url: '', title: '', ts: Date.now(),
+      state: 'error', error: err.message,
+      modal: false, focused: null,
+      alerts: [], errors: [],
+      inputs: [], selects: [], textareas: [], buttons: []
+    };
+  }
+}
+
+
+// =========================================================================
 // Module API: capture(page, opts)
 // =========================================================================
 
+/**
+ * Atomic: screenshot + DOM snapshot + flow.md registration.
+ *
+ * Writes two files per call:
+ *   qa/knowledgebase/screenshots/<file>          ← PNG
+ *   qa/knowledgebase/screenshots/<file>.dom.json ← inputs, buttons, links
+ *
+ * Returns { path, domPath, dom, file, registered, flowMd }
+ * Use dom.inputs / dom.buttons / dom.links directly — no extra page.evaluate() needed.
+ */
 async function capture(playwrightPage, opts) {
   const {
     flow,
@@ -220,16 +613,24 @@ async function capture(playwrightPage, opts) {
   }
 
   const screenshotPath = path.join(SCREENSHOTS_DIR, file);
+  const domPath = screenshotPath + '.dom.json';
 
-  // 1. Take the screenshot
   fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
-  await playwrightPage.screenshot({ path: screenshotPath, fullPage });
+
+  // 1. Screenshot + DOM snapshot in parallel — same page state
+  const [, dom] = await Promise.all([
+    playwrightPage.screenshot({ path: screenshotPath, fullPage }),
+    extractDOM(playwrightPage),
+  ]);
+  fs.writeFileSync(domPath, JSON.stringify(dom, null, 2));
 
   // 2. Register in flow.md
   const result = appendEvidence(flow, step, action, file, observed || '(pending visual analysis)', page);
 
   return {
     path: screenshotPath,
+    domPath,
+    dom,
     file,
     registered: result.appended,
     flowMd: result.flowMd || null,
@@ -702,7 +1103,7 @@ function cli() {
 // Exports + CLI entry
 // =========================================================================
 
-module.exports = { capture, appendEvidence, findFlowDir, audit, parseMarkdownTable };
+module.exports = { capture, extractDOM, appendEvidence, findFlowDir, audit, parseMarkdownTable };
 
 if (require.main === module) {
   cli();

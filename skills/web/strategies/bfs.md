@@ -238,15 +238,18 @@ For each URL in the queue:
   4. VERIFY — compare actual URL to intended URL
   5. DEDUP — content fingerprint check (same page, different URL?)
   6. ERROR CHECK — 404, empty route, generic error page
-  7. CREDENTIAL CHECK — detect input fields, auto-fill from .env.qa
-  8. REVEAL HIDDEN CONTENT — tabs, dropdowns, scroll (W-2.4)
-  9. SCREENSHOT — after everything is visible and settled
+  7. SCREENSHOT — capture the clean/empty page state BEFORE any form filling
+  8. CREDENTIAL CHECK — detect input fields, auto-fill from .env.qa
+  9. REVEAL HIDDEN CONTENT — tabs, dropdowns, scroll (W-2.4) — for link discovery only
   10. READ — visual analysis via Read tool
   11. COLLECT LINKS — href scan + safe button discovery (W-2.5)
   12. SAVE STATE — write crawl-state.json to disk
 ```
 
-> **Why this order matters**: The old loop took screenshots at step 5 (before revealing hidden content) and named them by intended URL (before verification). This caused the hallucination bug — same screen, different filenames. The new order screenshots AFTER verification, AFTER interaction, using the ACTUAL URL for naming.
+> **Why this order matters**:
+> - Screenshot at step 7 (before credential check) ensures the PNG shows the **empty form state** — what a user actually sees when they first arrive. If screenshot runs after credential fill (old step 9), the captured image shows pre-filled test credentials, which is misleading documentation.
+> - Reveal-hidden-content (W-2.4) is now AFTER screenshot — its purpose is **link discovery**, not visual state capture. The screenshot must come first.
+> - Screenshot is still AFTER verification (step 4) and error check (step 6) — named by ACTUAL URL, 404 pages are skipped before capture.
 
 ```javascript
 // ═══ BEFORE THE LOOP — create seed-crawl flow directory ═══
@@ -378,7 +381,25 @@ while (state.queue.length > 0) {
     continue;
   }
 
-  // ── 7. CREDENTIAL CHECK — detect fields, auto-fill from .env.qa ──
+  // ── 7. SCREENSHOT — capture the clean/empty page state BEFORE any form filling ──
+  // MUST run before credential check. If credentials are filled first, the PNG shows
+  // pre-filled test credentials instead of the empty form the user actually sees.
+  state.pageCount++;
+  // Prefix with zero-padded counter to guarantee unique filenames.
+  // Without this, /user/settings and /admin/settings both produce page-settings.png.
+  const screenshotFile = `page-${String(state.pageCount).padStart(2, '0')}-${nav.slug}.png`;
+
+  await capture(page, {
+    flow: 'seed-crawl',
+    step: state.pageCount,
+    action: `Visit ${nav.actualUrl}`,
+    observed: '(pending visual analysis)',
+    page: nav.slug,
+    file: screenshotFile,
+  });
+
+  // ── 8. CREDENTIAL CHECK — detect fields, auto-fill from .env.qa ──
+  // Runs AFTER screenshot so the credential-filled state is not captured.
   const credFields = await page.evaluate(() => {
     const fields = [];
     document.querySelectorAll('input[type="password"]').forEach(el =>
@@ -411,24 +432,9 @@ while (state.queue.length > 0) {
     // After successful auth, re-add gated URLs to queue.
   }
 
-  // ── 8. REVEAL HIDDEN CONTENT — tabs, dropdowns, scroll (W-2.4) ──
-  // This runs BEFORE the screenshot so the capture shows the full page state.
+  // ── 9. REVEAL HIDDEN CONTENT — tabs, dropdowns, scroll (W-2.4) — link discovery only ──
+  // Runs AFTER screenshot. Purpose is to expose more nav links for BFS queue.
   // See W-2.4 section below for the full interaction code.
-
-  // ── 9. SCREENSHOT — AFTER verification, interaction, and reveal ──
-  state.pageCount++;
-  // Prefix with zero-padded counter to guarantee unique filenames.
-  // Without this, /user/settings and /admin/settings both produce page-settings.png.
-  const screenshotFile = `page-${String(state.pageCount).padStart(2, '0')}-${nav.slug}.png`;
-
-  await capture(page, {
-    flow: 'seed-crawl',
-    step: state.pageCount,
-    action: `Visit ${nav.actualUrl}`,
-    observed: '(pending visual analysis)',
-    page: nav.slug,
-    file: screenshotFile,
-  });
 
   // ── 10. READ — visual analysis via Read tool ──
   // READ the screenshot with the Read tool now.
@@ -472,9 +478,9 @@ saveCrawlState();
 
 ---
 
-#### W-2.4: Reveal Hidden Content — Runs BEFORE Screenshot
+#### W-2.4: Reveal Hidden Content — Runs AFTER Screenshot (link discovery only)
 
-On each page, AFTER wait + verification but BEFORE screenshot, reveal interactive content so the screenshot captures the full page state.
+On each page, AFTER the screenshot is taken, reveal interactive content to collect additional navigation links for the BFS queue. The screenshot must come first to document the clean initial page state — not the state after interaction.
 
 ```javascript
 // 1. Tabs — click each to reveal content
@@ -758,7 +764,7 @@ If you observe ANY of these stall signals, switch to the declared fallback (do n
 
 | Stall signal | Action |
 |---|---|
-| Queue empties before MAX_PAGES with <10 pages found | Run `direct-URL fallback`: take all unvisited entries from `state.queue` + `hrefLinks`, `page.goto()` each with verification, screenshot. |
+| Queue empties before MAX_PAGES with <10 pages found | Run `direct-URL fallback`: use only URLs collected from `state.queue` + `hrefLinks` (href-extracted, never guessed). `page.goto()` each, call `isErrorPage()` — skip on 404/error, call `capture()` on valid pages only. Never construct sub-route URLs by hand (e.g. `${BASE}/dashboard/channels`) — SPA routes do not exist on the server. |
 | Same fingerprint hit on >50% of pages | Likely SPA with broken client routing — switch to `sitemap-spot-check` (read `/sitemap.xml`). |
 | Click-based nav fails on 5+ consecutive URLs | Drop click-nav entirely, use `page.goto()` only. Log in `qa/decisions.md`. |
 | MAX_PAGES reached with queue still large | Acceptable — this is by design. Record remaining queue size in `flow.md` Discovery Evidence. |

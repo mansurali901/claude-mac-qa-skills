@@ -81,9 +81,39 @@ Each platform skill maps this hierarchy onto its tool's API.
 - Update a helper → append a new entry to `qa/decisions.md` explaining what changed and why.
 - Never write a script without a fallback path baked in.
 
-## 9. Credentials — User-Gated, Never Bypass
+## 9. Bypass Detection — Universal, Dynamic, Never Skip
 
-If `.env.qa` has the value → use it (mandatory). If not → ask user. **Never autonomously click "Skip", "Set up later", or any bypass UI** — only the user can decide to skip a credential gate.
+Before clicking **any non-primary element** inside a wizard, onboarding, setup, or modal context, run the bypass classifier:
+
+### Step 1 — Structural detection
+A target is a bypass candidate if ANY of these are true:
+- It is styled as a ghost/link/text button (no filled background) while a filled primary CTA exists on the same screen — check via `page.evaluate(el => getComputedStyle(el).backgroundColor)` returning `rgba(0,0,0,0)` or `transparent`
+- Its font size is visibly smaller than the primary CTA
+- It has no border, no background, and low-contrast text
+
+### Step 2 — Semantic detection
+A target is a bypass candidate if its visible text (case-insensitive) matches the pattern:
+```
+/\b(skip|later|remind|not now|maybe|dismiss|cancel setup|continue without|without (setting|connecting|adding|completing)|do (this )?later|set up later|setup later|i'?ll do this later|skip for now|next time|no thanks|no,? thanks|pass|defer|ignore|close (this|setup|wizard|modal)|finish later)\b/i
+```
+
+This regex is **app-agnostic** — it matches semantic bypass intent in plain English regardless of app brand or specific wording.
+
+### Step 3 — Action
+- **If neither structural nor semantic signal fires** → click normally.
+- **If either signal fires** → DO NOT CLICK. Instead:
+  1. Take a screenshot of the current screen
+  2. Write `qa/pending-question.md` with:
+     - `blocker`: "Bypass button detected: '[button text]'"
+     - `evidence`: screenshot path + what was about to be clicked
+     - `options`: ["Provide missing value now (specify in chat)", "Click this bypass intentionally (confirm in chat)", "Skip this flow entirely for this run"]
+  3. Stop — do not proceed further in this step. Call `AskUserQuestion` with the pending question content.
+
+### Why this is dynamic, not hardcoded
+The classifier uses structural signals (visual hierarchy) + a semantic regex (intent patterns) — not literal text from any specific app. A button that says "Configure this later", "We'll do this in a moment", or "Not interested" will be caught by the semantic pattern. A button that has a filled primary peer will be caught by the structural check. New apps with novel phrasing still get caught.
+
+### The one exception
+If the user has explicitly answered the pending question with "Click this bypass intentionally" → the agent may click it **once** for that specific step, then the bypass lock resets for the next wizard screen.
 
 ## 10. Engagement Protocol — Never Terminate Silently
 

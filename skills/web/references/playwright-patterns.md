@@ -92,12 +92,15 @@ await expect.soft(page.getByRole('navigation')).toBeVisible();
 
 ## Screenshots & Visual Validation
 
-```typescript
-// Full-page screenshot
-await page.screenshot({ path: 'qa/evidence/TC-001-S1-pass.png', fullPage: true });
+> ⚠️ STRICT RULE: NEVER use Playwright's native `page.screenshot()`. 
+> You MUST use the `capture()` wrapper from `scripts/qa-screenshot.js` for atomic registration and `.dom.json` generation. Raw screenshots bypass the coverage gate.
 
-// Element screenshot
-await page.locator('.chart-container').screenshot({ path: 'qa/evidence/TC-001-chart.png' });
+```typescript
+// Import the custom capture wrapper (adjust relative path if in QA scripts)
+const { capture } = require('../../scripts/qa-screenshot.js');
+
+// Full-page screenshot with atomic registration
+await capture(page, 'dashboard-main-view');
 
 // Visual regression (snapshot comparison)
 await expect(page).toHaveScreenshot('dashboard-baseline.png', {
