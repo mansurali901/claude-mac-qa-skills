@@ -97,12 +97,17 @@ if [ ! -d "qa" ] || [ ! -f "qa/.qa-config.json" ]; then
 elif [ ! -d "qa/flows" ] && [ ! -d "qa/features" ] && [ ! -d "qa/test-cases/P1-critical" ]; then
   echo "CONFIGURED_NO_FLOWS"
 else
-  # Count TC files — if zero, exploration is done but Phase 2 hasn't run
-  TC_COUNT=$(find qa -name "TC-*.md" 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$TC_COUNT" -eq 0 ]; then
-    echo "EXPLORATION_COMPLETE"
+  # HAS_SPECS: journey specs exist — prompt run options first
+  SPEC_COUNT=$(find qa/journeys -name "*.spec.ts" 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$SPEC_COUNT" -gt 0 ]; then
+    echo "HAS_SPECS"
   else
-    echo "HAS_WORKSPACE"
+    TC_COUNT=$(find qa -name "TC-*.md" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$TC_COUNT" -eq 0 ]; then
+      echo "EXPLORATION_COMPLETE"
+    else
+      echo "HAS_WORKSPACE"
+    fi
   fi
 fi
 ```
@@ -112,6 +117,7 @@ fi
 | `INIT` | → **Step 1: INIT MODE** |
 | `CONFIGURED_NO_FLOWS` | → **Step 2: App Selection** (workspace ready, need discovery) |
 | `EXPLORATION_COMPLETE` | → Load the platform SKILL.md and jump directly to its **Phase 2** entry point (Web → Step W-7, macOS → Step 8). Announce: *"Phase 1 already complete — continuing to Phase 2."* |
+| `HAS_SPECS` | → **Run Mode** — journey specs detected. Ask: *"Test suites found. (1) Run all journeys end-to-end (2) Run one journey by ID (3) Run specific TCs by ID (4) Regenerate / update tests"*. Write `qa/run-state.md`, then execute `node qa/run.js [args]`. Skip exploration entirely. |
 | `HAS_WORKSPACE` | → Load the platform SKILL.md and jump to its **Update Mode** section (Web → Step W-13, macOS → Step 12). Announce: *"Existing workspace found — entering update mode."* |
 
 ---

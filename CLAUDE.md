@@ -210,6 +210,11 @@ Three session artefacts carry context across resets. All three are cheap to re-r
 | `qa/state.md` | **Updated per checkpoint** | App under test, journeys done/pending, coverage %, resume command. One global file across all platforms. Per-flow checkpoints shrink to a 6-line `## Active Position` pointer block; heavy template only at phase boundaries. |
 | `qa/progress.jsonl` | **Append-only step ledger** | One line per step event (≤150 bytes) — `{ts,flow,step,action,url,outcome}`. Resume reads `tail -n 30` only; never full-read. Committed (audit trail). |
 | `qa/flows/F-NNN-*/manifest.jsonl` | **Per-flow planned-step checklist** | One line per planned step with mutable `status` (`pending` / `done` / `skipped(reason)` / `blocked(reason)`). The agent drives every line to terminal status before advancing — see `skills/_shared/engagement-protocol.md` → *End-to-End Completion is Mandatory*. Resume: `grep -v '"status":"done"'` picks the next step. |
+| `qa/run-state.md` | **Run-time todos** | One row per journey (`⬜ pending` → `⏳ running` → `✅ done` / `❌ failed`). Written before the run, updated after each journey. Never rewritten in full — only the status cell changes. On re-trigger, agent skips `✅` rows and resumes from the first non-done row. |
+| `qa/journeys/J-NNN-*.spec.ts` | Generated at W-11 | Chained end-to-end journey per role — all TCs share one browser context + `storageState`. Shippable as-is. |
+| `qa/specs/TC-NNN-*.spec.ts` | Generated at W-11 | Flat per-TC specs; runnable individually. |
+| `qa/run.js` | Generated at W-11 | Cross-platform Node.js runner (Mac / Linux / Windows). No shell scripts. |
+| `qa/package.json` | Generated at W-11 | Self-contained deps (`@playwright/test`, `dotenv`); makes `qa/` independently runnable after `npm install`. |
 
 Strategy-specific resume artefacts (e.g. `qa/crawl-state.json` for BFS, `qa/trace-state.json` for targeted-trace) are owned by the platform skill and auto-saved after every page so mid-strategy resume is free.
 
@@ -324,6 +329,7 @@ qa/knowledgebase/screenshots/
 qa/crawl-state.json
 qa/.auth/
 qa/reports/
+qa/node_modules/
 playwright-report/
 allure-results/
 allure-report/

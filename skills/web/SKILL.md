@@ -743,58 +743,194 @@ test('TC-NNN: [description]', async ({ page }) => {
 
 ---
 
-## Phase 4: Test Execution
+## Phase 4: Test Extraction, Bundling & Execution
 
-**Goal**: Extract Playwright code from TC files, run tests, capture results.
+**Goal**: Extract Playwright code from TC files, build journey bundles, write the self-contained runner, then execute.
 **Input**: `qa/flows/F-NNN-*/test-cases/TC-NNN-*.md` files from Phase 3.
-**Output**: `.spec.ts` files + Playwright execution results (pass/fail, screenshots on failure).
-**End**: Generate unified report and open in browser.
+**Output**: `qa/specs/`, `qa/journeys/`, `qa/run.js`, `qa/package.json`, run results, HTML report.
 
-### Step W-11: Extract Specs and Run
+### Step W-10.5: Pre-Extraction Quality Review
 
-After all TCs are written, extract the Playwright TypeScript from each TC-*.md into runnable .spec.ts files:
+Before extracting any spec, scan every `TC-*.md` code block for **Quality Contract violations**. Fix all inline before proceeding to W-11. No violations may survive into extracted `.spec.ts` files.
+
+**Quality Contract — every generated spec MUST satisfy ALL of these:**
+1. **Syntactically valid TypeScript** — no missing `await`, no unresolved imports, no `any` on assertions.
+2. **Logically complete** — every step has a meaningful `expect()` assertion. No `// TODO`, no empty `expect()`.
+3. **No placeholder values** — no `[selector]`, `[route]`, `[label]`, `[value]` remaining in code blocks.
+4. **No hardcoded credentials** — all creds via `process.env.QA_*`.
+5. **Semantic locators preferred** — `getByRole` > `getByLabel` > `getByTestId` > CSS. CSS allowed only with a comment explaining why.
+6. **No bare `waitForTimeout`** — replace with `waitForSelector`, `waitForResponse`, `waitForURL`, or `waitForFunction`.
+7. **`storageState` at describe/`test.use` level** — never re-login inside a test that has a cached session.
+
+---
+
+### Step W-11: Extract Specs, Build Journeys, Write Runner
+
+Run this full generation script (write it to `qa/scripts/build-suite.js`, execute once):
 
 ```javascript
-// Extract specs inline — find all TC-*.md, pull out ```typescript blocks, write .spec.ts
-const fs = require('fs');
+// Why: one-pass extraction + journey bundling + self-contained runner generation.
+// Strategy: extracts TC code blocks → qa/specs/, groups by role → qa/journeys/,
+//           writes qa/package.json + qa/run.js so qa/ is independently runnable.
+// Fallback: on any write error, log path + error and continue — never abort entire pass.
+const fs   = require('fs');
 const path = require('path');
 
+const QA   = path.resolve(__dirname, '..');  // qa/
+const SPECS = path.join(QA, 'specs');
+const JOURNEYS = path.join(QA, 'journeys');
+fs.mkdirSync(SPECS,    { recursive: true });
+fs.mkdirSync(JOURNEYS, { recursive: true });
+
+// ── 1. Extract flat specs ────────────────────────────────────────────────────
 function findTCs(dir) {
-  const results = [];
-  if (!fs.existsSync(dir)) return results;
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => {
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) results.push(...findTCs(p));
-    else if (e.name.startsWith('TC-') && e.name.endsWith('.md')) results.push(p);
-  }
-  return results;
+    return e.isDirectory() ? findTCs(p)
+         : (e.name.startsWith('TC-') && e.name.endsWith('.md')) ? [p] : [];
+  });
 }
 
-for (const tc of findTCs('qa')) {
+const tcs = findTCs(QA).sort();
+const byRole = {};  // role → [{tcId, slug, specPath, flowId}]
+
+for (const tc of tcs) {
   const content = fs.readFileSync(tc, 'utf8');
-  const match = content.match(/```typescript\s*\n([\s\S]*?)```/);
-  if (!match) { console.log('⚠ No TS block:', tc); continue; }
-  const specPath = tc.replace(/\.md$/, '.spec.ts');
-  fs.writeFileSync(specPath, match[1].trim() + '\n');
-  console.log('✅', path.relative('.', specPath));
+  const code    = content.match(/```typescript\s*\n([\s\S]*?)```/)?.[1]?.trim();
+  if (!code) { console.warn('⚠ No TS block:', tc); continue; }
+
+  const tcId  = path.basename(tc, '.md');                  // TC-001-cold-launch
+  const flowDir = path.basename(path.dirname(path.dirname(tc)));  // F-001-slug
+  const specFile = path.join(SPECS, tcId + '.spec.ts');
+  fs.writeFileSync(specFile, code + '\n');
+  console.log('✅ spec:', path.relative(QA, specFile));
+
+  // Derive role from flow.md Role row
+  const flowMd = path.join(QA, 'flows', flowDir, 'flow.md');
+  let role = 'anonymous';
+  if (fs.existsSync(flowMd)) {
+    const m = fs.readFileSync(flowMd, 'utf8').match(/\|\s*\*\*Role\*\*\s*\|\s*([^\|]+)\|/);
+    if (m) role = m[1].trim().toLowerCase().split(/[\s\/]/)[0];
+  }
+  (byRole[role] ??= []).push({ tcId, flowDir, specFile });
 }
+
+// ── 2. Build journey bundles (one per role) ──────────────────────────────────
+const roles = Object.keys(byRole).sort();
+roles.forEach((role, idx) => {
+  const jNum  = String(idx + 1).padStart(3, '0');
+  const jFile = path.join(JOURNEYS, `J-${jNum}-${role}.spec.ts`);
+  const storageState = `qa/.auth/${role}.json`;
+
+  const steps = byRole[role].map(({ tcId, specFile }) => {
+    const code = fs.readFileSync(specFile, 'utf8');
+    // wrap each top-level test() as a test.step() inside the journey test
+    const stepped = code
+      .replace(/^import.*\n/gm, '')          // remove duplicate imports
+      .replace(/^test\(/, 'await test.step(') // indent test → step
+      .replace(/\}\);$/, '});');
+    return `  // ${tcId}\n  ${stepped.trim()}`;
+  }).join('\n\n');
+
+  const journeyTs = `import { test, expect } from '@playwright/test';
+import * as dotenv from 'dotenv';
+dotenv.config({ path: '../.env.qa' });
+
+// Journey: ${role} — ${byRole[role].length} TCs in session order
+test.use({ storageState: '${storageState}' });
+
+test('J-${jNum}: ${role} full journey', async ({ page }) => {
+${steps}
+});
+`;
+  fs.writeFileSync(jFile, journeyTs);
+  console.log('✅ journey:', path.relative(QA, jFile));
+});
+
+// ── 3. Write qa/package.json ─────────────────────────────────────────────────
+const pkg = {
+  name: 'qa-suite', private: true,
+  scripts: {
+    test:           'node run.js',
+    'test:journey': 'node run.js --journey',
+    'test:cases':   'node run.js --cases'
+  },
+  dependencies: { '@playwright/test': '^1.44.0', dotenv: '^16.0.0' }
+};
+fs.writeFileSync(path.join(QA, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
+console.log('✅ qa/package.json');
+
+// ── 4. Write qa/run.js ───────────────────────────────────────────────────────
+const runner = `#!/usr/bin/env node
+// Cross-platform runner — Mac, Linux, Windows. Requires Node 20+.
+const { execSync } = require('child_process');
+const args     = process.argv.slice(2);
+const journey  = args[args.indexOf('--journey') + 1];
+const cases    = args[args.indexOf('--cases')   + 1];
+
+console.log('→ Installing dependencies...');
+execSync('npm install --silent',                   { stdio: 'inherit', cwd: __dirname });
+execSync('npx playwright install chromium --quiet', { stdio: 'inherit', cwd: __dirname });
+
+const grep   = journey ? \`--grep "J-\${journey}"\`
+             : cases   ? \`--grep "\${cases.split(',').join('|')}"\`
+             : '';
+const target = cases ? 'specs/' : 'journeys/';
+
+console.log(\`→ Running \${target} \${grep || '(all)'}\`);
+execSync(
+  \`npx playwright test \${target} \${grep} --reporter=html --continue-on-failure\`,
+  { stdio: 'inherit', cwd: __dirname }
+);
+execSync('npx playwright show-report', { stdio: 'inherit', cwd: __dirname });
+`;
+fs.writeFileSync(path.join(QA, 'run.js'), runner);
+console.log('✅ qa/run.js');
+
+// ── 5. Copy .env.example into qa/ if not already there ───────────────────────
+const envSrc  = path.resolve(QA, '..', '.env.example');
+const envDest = path.join(QA, '.env.example');
+if (fs.existsSync(envSrc) && !fs.existsSync(envDest))
+  fs.copyFileSync(envSrc, envDest);
+
+console.log(`\n✅ Suite built: ${tcs.length} specs, ${roles.length} journeys.`);
+console.log('   Share: zip -r qa-suite.zip qa/ --exclude "qa/node_modules/*" --exclude "qa/.auth/*" --exclude "qa/knowledgebase/screenshots/*" --exclude "qa/.env.qa"');
+console.log('   Run:   node qa/run.js');
 ```
 
-Then run the tests:
+Execute: `node qa/scripts/build-suite.js`
 
-```bash
-# Run public tests (no auth)
-npx playwright test --project chromium-public --config qa/playwright.config.ts
+---
 
-# Set up auth session (one-time)
-npx playwright test --project setup --config qa/playwright.config.ts
+### Step W-11b: Journey Execution with Run-State Tracking
 
-# Run all tests (allure-playwright reporter auto-generates allure-results)
-npx playwright test --config qa/playwright.config.ts
+Before running, write `qa/run-state.md` (the run todo — ≤30 lines total):
 
-# Run specific TC
-npx playwright test --grep "TC-001" --config qa/playwright.config.ts
+```markdown
+# Run State — [AppName] [YYYY-MM-DD HH:MM]
+> Resume: re-trigger `/native-qa` → option 1, or `node qa/run.js`
+
+| Journey | Role | TCs | Status | Failure |
+|---------|------|-----|--------|---------|
+| J-001 | anonymous | TC-001,TC-005 | ⬜ pending | — |
+| J-002 | member | TC-002,TC-003 | ⬜ pending | — |
+| J-003 | admin | TC-006,TC-007 | ⬜ pending | — |
 ```
+
+Then for each journey row, in order:
+1. Update row status → `⏳ running`
+2. `npx playwright test qa/journeys/J-NNN-*.spec.ts --reporter=line --continue-on-failure`
+3. Parse exit code + first failure line from stdout
+4. Update row → `✅ done` or `❌ failed(TC-NNN: first-failure-text)`
+
+**Resume from partial failure**: on re-trigger, read `qa/run-state.md`, skip `✅ done` rows, continue from first non-done row. No re-running passing journeys.
+
+After all rows terminal:
+- Generate report: `node scripts/allure/generate-report.js --open`
+- Append to `qa/run-state.md`: `Result: N/M journeys passed. Failed: J-NNN. Report: qa/playwright-report/index.html`
+
+---
 
 ### Step W-12: Generate Final Report
 
@@ -803,6 +939,14 @@ node scripts/allure/generate-report.js --open
 ```
 
 Tell the user: `"✅ All 4 phases complete. [N] flows, [N] scenarios, [N] TCs, [N] passed / [N] failed. Report opened."`
+
+**To share the test suite:**
+```bash
+zip -r qa-suite.zip qa/ \
+  --exclude "qa/node_modules/*" --exclude "qa/.auth/*" \
+  --exclude "qa/knowledgebase/screenshots/*" --exclude "qa/.env.qa"
+```
+Recipient: `unzip qa-suite.zip && cp qa/.env.example qa/.env.qa` (fill URL + creds) → `node qa/run.js`
 
 ---
 
