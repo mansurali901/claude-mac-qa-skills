@@ -21,7 +21,8 @@
       "Bash(node *)",
       "Bash(npx allure *)",
       "Bash([ -f \"$STATE_FILE\" ])",
-      "Bash(mkdir *)"
+      "Bash(mkdir *)",
+      "Read(//home/taha/.cache/ms-playwright/**)"
     ]
   }
 }

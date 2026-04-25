@@ -745,9 +745,18 @@ test('TC-NNN: [description]', async ({ page }) => {
 
 ## Phase 4: Test Extraction, Bundling & Execution
 
-**Goal**: Extract Playwright code from TC files, build journey bundles, write the self-contained runner, then execute.
+**Output contract — Phase 4 is NOT complete until ALL of these exist in `qa/`:**
+
+| File / Dir | Content |
+|---|---|
+| `specs/TC-NNN-*.spec.ts` | One file per TC — flat, independently runnable |
+| `journeys/J-NNN-<role>.spec.ts` | One file per role — all that role's TCs chained in one browser session |
+| `run.js` | Cross-platform Node runner: `node run.js` · `--journey J-002` · `--cases TC-001,TC-004` |
+| `package.json` | `@playwright/test` + `dotenv` — makes `qa/` runnable without the parent project |
+
+If any are missing after W-11, re-run `node qa/scripts/build-suite.js` before declaring Phase 4 done.
+
 **Input**: `qa/flows/F-NNN-*/test-cases/TC-NNN-*.md` files from Phase 3.
-**Output**: `qa/specs/`, `qa/journeys/`, `qa/run.js`, `qa/package.json`, run results, HTML report.
 
 ### Step W-10.5: Pre-Extraction Quality Review
 
@@ -825,12 +834,10 @@ roles.forEach((role, idx) => {
 
   const steps = byRole[role].map(({ tcId, specFile }) => {
     const code = fs.readFileSync(specFile, 'utf8');
-    // wrap each top-level test() as a test.step() inside the journey test
-    const stepped = code
-      .replace(/^import.*\n/gm, '')          // remove duplicate imports
-      .replace(/^test\(/, 'await test.step(') // indent test → step
-      .replace(/\}\);$/, '});');
-    return `  // ${tcId}\n  ${stepped.trim()}`;
+    // Extract the async test body (between first `async ({ page }) => {` and last `};`)
+    const bodyMatch = code.match(/async\s*\(\{\s*page[^}]*\}\)\s*=>\s*\{([\s\S]*)\}\s*\);?\s*$/);
+    const body = bodyMatch ? bodyMatch[1].trim() : `// ⚠ could not extract body from ${tcId}`;
+    return `  await test.step('${tcId}', async () => {\n    ${body.replace(/\n/g, '\n    ')}\n  });`;
   }).join('\n\n');
 
   const journeyTs = `import { test, expect } from '@playwright/test';
